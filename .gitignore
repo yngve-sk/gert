@@ -1,0 +1,49 @@
+# --- GERT Specifics ---
+# --- Byte-compiled / optimized / DLL files ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environments ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Distribution / Packaging ---
+dist/
+build/
+*.egg-info/
+*.egg
+
+# --- Static Analysis & Linting ---
+.mypy_cache/
+.ruff_cache/
+.pyre_cache/
+.pytest_cache/
+.hypothesis/
+
+# --- Unit Testing / Coverage ---
+.coverage
+htmlcov/
+.tox/
+.nosetics
+nosetests.xml
+coverage.xml
+
+# --- OS / IDE Specifics ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+.venv
+
+# --- Data & Logs ---
+# Ignore local logs and sqlite DBs if used for dev
+*.log
+*.sqlite
+
+# Ignore local parquet/jsonl exports during dev runs
+*.parquet
+*.jsonl
