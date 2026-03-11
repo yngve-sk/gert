@@ -47,3 +47,9 @@ coverage.xml
 # Ignore local parquet/jsonl exports during dev runs
 *.parquet
 *.jsonl
+
+.aider.*
+!.aider.conf.yml
+.clj-kondo
+.lsp
+.aider.chat_history.md
