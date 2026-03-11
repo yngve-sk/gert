@@ -54,3 +54,5 @@ coverage.xml
 .lsp
 .aider.chat_history.md
 .env
+
+src/gert/version.py

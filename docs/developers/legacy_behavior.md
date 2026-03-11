@@ -18,7 +18,7 @@ Silent File Backups in Runpaths
 - Re-running an iteration, or any condition where `_create_run_path` targets an already-populated directory.
 
 ### Visible effect
-- Accumulation of multiple `_backup_YYYYMMDDTHHMMSS` files in the runpath directories. 
+- Accumulation of multiple `_backup_YYYYMMDDTHHMMSS` files in the runpath directories.
 
 ### Evidence
 - `new_path = path.parent / f"{path.name}_backup_{timestamp}"; path.rename(new_path)`
@@ -66,7 +66,7 @@ Forward Init Parameter Skipping
 - preserve exactly
 
 ### Notes
-- This is a core ERT mechanism for allowing forward models (like reservoir simulators) to sample their own priors on the first run, rather than relying on ERT's `probabilit` sampling. 
+- This is a core ERT mechanism for allowing forward models (like reservoir simulators) to sample their own priors on the first run, rather than relying on ERT's `probabilit` sampling.
 
 ---
 
@@ -239,7 +239,7 @@ Rejection of RMS "Missing Data" Markers (-1 / 0)
 Parse-Time Evaluation of Error Modes
 
 ### What happens
-- The concepts of relative errors (`REL`, `RELMIN`) are not preserved as system state. When ERT parses an observation configuration, it immediately calculates the absolute error value using the provided `VALUE` and `ERROR` inputs, and stores only the resulting absolute float. 
+- The concepts of relative errors (`REL`, `RELMIN`) are not preserved as system state. When ERT parses an observation configuration, it immediately calculates the absolute error value using the provided `VALUE` and `ERROR` inputs, and stores only the resulting absolute float.
 
 ### Where observed
 - **files:** `src/ert/config/_observations.py`
@@ -264,7 +264,7 @@ Parse-Time Evaluation of Error Modes
 - preserve approximately
 
 ### Notes
-- This means GERT's `Observation` objects only need a `std_dev` property (as established in previous architectural discussions), because the conversion from relative percentages to absolute standard deviation happens immediately at parse time. 
+- This means GERT's `Observation` objects only need a `std_dev` property (as established in previous architectural discussions), because the conversion from relative percentages to absolute standard deviation happens immediately at parse time.
 
 ---
 

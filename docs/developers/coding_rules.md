@@ -5,9 +5,9 @@ This document defines the strict coding standards, formatting rules, and quality
 ---
 
 ## 1. Automated Linting & Formatting (`ruff`)
-GERT uses [`ruff`](https://docs.astral.sh/ruff/) as the absolute authority for both linting and formatting. 
+GERT uses [`ruff`](https://docs.astral.sh/ruff/) as the absolute authority for both linting and formatting.
 
-* **The Opt-Out Philosophy:** GERT configures `ruff` with **all rules enabled by default** (`select = ["ALL"]` in `pyproject.toml`). 
+* **The Opt-Out Philosophy:** GERT configures `ruff` with **all rules enabled by default** (`select = ["ALL"]` in `pyproject.toml`).
 * **Rule Exemptions:** We only ignore specific rules if they strictly conflict with each other (e.g., formatting compatibility rules like `ISC001`) or if they are objectively detrimental to the GERT architecture. Any ignored rule in `pyproject.toml` must be accompanied by an inline comment explaining *why* it is ignored.
 * **Auto-formatting:** The `ruff format` command is used for all code formatting. It replaces `black` and `isort`. Code must be formatted before being committed.
 * **No manual style debates:** If `ruff format` and `ruff check` pass, the style is considered correct.

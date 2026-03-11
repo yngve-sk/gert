@@ -45,4 +45,3 @@ This document outlines the core architectural constraints and design rules that 
 ### Rule 11: Fail Fast and Strict Input Validation
 * **Statement:** The system must reject invalid inputs immediately and loudly at the outermost boundary. It must never silently sanitize, guess, or attempt to gracefully recover from malformed data.
 * **Explanation:** If an API payload, observation set, or parameter matrix is incomplete, malformed, or mathematically invalid, GERT must raise a strict, terminal error immediately (typically via Pydantic validation). Do not let bad state propagate deeper into the execution or mathematical layers before failing.
-

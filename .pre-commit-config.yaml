@@ -1,0 +1,32 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0  # Bumped to v5.0.0 to fix the deprecated stage names warning
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.9  # Bumped to a modern version of Ruff that includes the ruff-format hook
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [ --fix ]
+      # Run the formatter
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0 # Bumped to the latest mypy mirror
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - pydantic
+          - fastapi
+          - pytest
+        # Ensure mypy checks all files, not just changed ones
+        pass_filenames: false
+        args: ["--strict", "src/gert", "tests"]

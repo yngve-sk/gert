@@ -1,0 +1,138 @@
+[build-system]
+requires = ["setuptools", "setuptools_scm>=8.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gert"
+description = "Generic Ensemble Reservoir Tool - API-first orchestration engine for ensemble-based modeling."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+authors = [
+    { name = "GERT Contributors" }
+]
+dynamic = ["version"]
+dependencies = [
+    "pydantic>=2.0",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "polars>=0.19",
+    "pyarrow>=13.0",    # Required for Polars Parquet support
+    "psij-python>=0.1", # HPC job submission abstraction
+    "websockets>=11.0",
+]
+
+[project.scripts]
+gert = "gert.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.1",
+    "hypothesis>=6.82",
+    "mypy>=1.5",
+    "pre-commit>=3.3",
+    "ruff>=0.0.280",
+]
+style = ["pre-commit"]
+types = ["mypy"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+platforms = ["all"]
+
+[tool.setuptools_scm]
+version_file = "src/gert/version.py"
+# Fallback needed due to https://github.com/dependabot/dependabot-core/issues/12340
+fallback_version = "0.0.0"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --cov=gert --cov-report=term-missing"
+testpaths = ["tests"]
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "snapshots",
+    "baseline",
+]
+markers = [
+    "integration_test",
+    "slow",
+]
+log_cli = "false"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 360
+session_timeout = 2400
+timeout_func_only = true # Do not apply timeout to fixtures which can be slow but cached
+
+[tool.ruff]
+src = ["src"]
+line-length = 88
+
+[tool.ruff.lint]
+# Roadmap strictly specifies selecting ALL rules for architectural integrity
+select = ["ALL"]
+preview = true
+ignore = [
+    "D",       # pydocstyle (Docstrings are handled by docs/ as prompts)
+    "ANN101",  # Missing type annotation for `self` in method
+    "ANN102",  # Missing type annotation for `cls` in classmethod
+    "FA100",   # Missing `from __future__ import annotations`
+    "G004",    # logging-f-string
+    "PLW2901", # redefined-loop-name
+    "PLR2004", # magic-value-comparison
+    "PLR0915", # too-many-statements
+    "PLR0912", # too-many-branches
+    "PLR0911", # too-many-return-statements
+    "PLC2701", # import-private-name
+    "PLR0914", # too-many-locals
+    "PLR6301", # no-self-use
+    "PLW1641", # eq-without-hash
+    "PLR0904", # too-many-public-methods
+    "PLR1702", # too-many-nested-blocks
+    "RUF067",  # code in __init__ files
+    "RUF069",  # unreliable floating point comparison
+]
+
+# Allow EN DASH (U+2013)
+allowed-confusables = ["–"]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/*" = [
+    "PLW0603", # global-statement
+    "RUF029",  # unused-async
+    "RUF018",  # assignment-in-assert
+    "RUF006",  # asyncio-dangling-task
+    "PLW1508", # Invalid type of environment variable default
+    "RUF052",  # used-dummy-variable
+    "RUF045",  # implicit-class-var-in-dataclass
+    "ASYNC240", # blocking-path-method-in-async-function
+]
+
+[tool.ruff.lint.pylint]
+max-args = 20
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends"]
+
+[tool.mypy]
+# PR 1.1: Strict mypy typing enforced
+strict = true
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+# Ignore missing stubs for external libraries if they don't provide them
+module = [
+    "psij.*",
+    "polars.*"
+]
+ignore_missing_imports = true
+
+[tool.uv]
+fork-strategy = "requires-python"
