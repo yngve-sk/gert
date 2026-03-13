@@ -27,13 +27,13 @@ gert = "gert.__main__:main"
 
 [dependency-groups]
 dev = [
-    "pytest>=7.4",
-    "pytest-asyncio>=0.21",
-    "pytest-cov>=4.1",
-    "hypothesis>=6.82",
-    "mypy>=1.5",
-    "pre-commit>=3.3",
-    "ruff>=0.0.280",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "hypothesis",
+    "mypy",
+    "pre-commit",
+    "ruff",
 ]
 style = ["pre-commit"]
 types = ["mypy"]
@@ -79,6 +79,7 @@ ignore = [
     "D",       # pydocstyle (Docstrings are handled by docs/ as prompts)
     "ANN101",  # Missing type annotation for `self` in method
     "ANN102",  # Missing type annotation for `cls` in classmethod
+    "CPY001",  # Missing copyright on top of file
     "FA100",   # Missing `from __future__ import annotations`
     "G004",    # logging-f-string
     "PLW2901", # redefined-loop-name
