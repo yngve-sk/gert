@@ -3,7 +3,7 @@
 ![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License: GPLv3](https://img.shields.io/badge/License-GPLv3-green.svg)
 
-**GERT** is a modern, API-first, and strictly domain-agnostic orchestration engine for ensemble-based modeling and history matching. 
+**GERT** is a modern, API-first, and strictly domain-agnostic orchestration engine for ensemble-based modeling and history matching.
 
 Designed as a clean-room, ground-up reimagining of legacy ensemble tools, GERT acts purely as a highly scalable execution loop. It completely decouples mathematical data assimilation algorithms and domain-specific simulators from the core orchestration engine, exposing its capabilities entirely through robust HTTP and WebSocket APIs.
 
@@ -11,7 +11,7 @@ Designed as a clean-room, ground-up reimagining of legacy ensemble tools, GERT a
 
 ## ⚡ Core Philosophy & Features
 
-* 🌍 **Strictly Domain-Agnostic:** GERT possesses zero knowledge of specific forward models (i.e., reservoir engineering, fluid dynamics, or specific simulators). Parameters and responses are treated purely as generic 1D/2D/3D tensors or scalar values. 
+* 🌍 **Strictly Domain-Agnostic:** GERT possesses zero knowledge of specific forward models (i.e., reservoir engineering, fluid dynamics, or specific simulators). Parameters and responses are treated purely as generic 1D/2D/3D tensors or scalar values.
 * 🚀 **API-Driven Data Ingestion (Push, Not Poll):** GERT abandons heavy file-system watchers. Forward models primarily push sparse data payloads directly to a high-throughput ingestion API, which seamlessly consolidates the data into columnar `.parquet` files via `polars`.
 * 🔒 **Immutable Configurations:** Experiment configurations are treated as absolute, immutable artifacts. GERT enforces strict reproducibility by permanently embedding the exact prior Parameter Matrix used at initialization.
 * 🧮 **Decoupled Mathematics:** GERT does not do math. It manages the orchestration loop and passes flattened, high-performance `parquet` matrices to your external mathematical libraries of choice (e.g., `iterative_ensemble_smoother`).

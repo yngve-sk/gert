@@ -5,12 +5,12 @@
 This project is an independent, clean-room implementation of an API-first ensemble orchestration engine, distributed under the GNU General Public License v3.0 (GPLv3).
 
 ## Lineage & Acknowledgments
-GERT's conceptual domain architecture and decoupled design are heavily inspired by the operational workflows of the legacy Ensemble based Reservoir Tool (ERT), originally developed by Equinor ASA. 
+GERT's conceptual domain architecture and decoupled design are heavily inspired by the operational workflows of the legacy Ensemble based Reservoir Tool (ERT), originally developed by Equinor ASA.
 
 We respectfully acknowledge Equinor's massive contribution to the open-source community and the field of ensemble-based history matching. GERT aims to build upon those domain concepts using modern, generic web architecture.
 
 ## Intellectual Property Boundary
-While GERT shares the same open-source license (GPLv3) and conceptual goals as legacy ERT, GERT is a complete, ground-up redesign and rewrite. 
+While GERT shares the same open-source license (GPLv3) and conceptual goals as legacy ERT, GERT is a complete, ground-up redesign and rewrite.
 
 For absolute clarity:
 * GERT contains **ZERO** source code copied from the original Equinor ERT repository.

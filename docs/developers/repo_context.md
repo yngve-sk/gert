@@ -1,7 +1,7 @@
 # GERT (Generic Ensemble Reservoir Tool) - Repository Context
 
 ## Project Overview
-Welcome to the GERT repository. GERT is a modern, API-first, and strictly **domain-agnostic** redesign of the legacy ERT (Ensemble based Reservoir Tool). 
+Welcome to the GERT repository. GERT is a modern, API-first, and strictly **domain-agnostic** redesign of the legacy ERT (Ensemble based Reservoir Tool).
 
 GERT acts purely as a scalable execution and orchestration engine for ensemble-based modeling. It decouples mathematical updates (data assimilation) and domain-specific simulators from the core orchestration loop.
 
@@ -47,6 +47,6 @@ When generating code, use the following libraries and patterns:
 When asked to implement a new feature or micro-step, you must strictly follow this iterative workflow to ensure the codebase remains in a working, testable state:
 1. **Scaffold:** Generate the empty module files, class definitions, and function signatures with full type hints and docstrings. Leave the implementation empty.
 2. **Test:** Generate the `pytest` test file for that specific scaffolding.
-3. **Iterate:** Generate the actual implementation code to make the tests pass. 
+3. **Iterate:** Generate the actual implementation code to make the tests pass.
 
 **Do not generate massive blocks of untested implementation logic in a single response. Always leave the build green.**

@@ -1,0 +1,20 @@
+model: gemini/gemini-2.5-flash-lite
+
+edit-format: architect
+editor-model: gemini/gemini-2.5-flash-lite
+editor-edit-format: diff-fenced
+
+read:
+  - docs/developers/repo_context.md
+  - docs/developers/architecture.md
+  - docs/developers/coding_rules.md
+  - docs/developers/design_rules.md
+  - docs/developers/interfaces.md
+  - docs/developers/legacy_behavior.md
+  - docs/developers/repo_context.md
+  - docs/developers/roadmap.md
+  - docs/developers/test_strategy.md
+
+# This prevents the 'no-stream' exit behavior in some versions
+stream: false
+gitignore: false

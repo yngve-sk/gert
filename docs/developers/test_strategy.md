@@ -8,11 +8,11 @@ For core domain logic, mathematical updates, matrix assembly, and parameter gene
 * **Rule:** If a function performs numerical transformations, joining, or mathematical assimilation, write a `hypothesis` test for it.
 
 ## 2. Testing the "Fail Fast" Boundary
-Because GERT relies on strict input validation (Rule 11) and `pydantic` models, we do not test impossible language edge cases (like passing a string to an integer addition). 
+Because GERT relies on strict input validation (Rule 11) and `pydantic` models, we do not test impossible language edge cases (like passing a string to an integer addition).
 * **Negative Testing:** We *do* test that invalid domain logic is caught at the outermost boundary. Use `pytest.raises` to assert that providing mathematically impossible configurations (e.g., an observation with `std_dev = -1.5`) immediately triggers a clear, descriptive validation error before execution begins. All pytest.raises blocks must also catch a specific exception message, not just the type, i.e., use regex match.
 
 ## 3. Fast, Pure Unit Tests (The Bulk)
-The vast majority of the test suite must run in milliseconds. 
+The vast majority of the test suite must run in milliseconds.
 * Because code is designed with **Dependency Injection** and **I/O Isolation**, you can unit test the `ExperimentOrchestrator`'s state machine without actually submitting jobs to an HPC cluster.
 * Unit tests assert that given specific, valid inputs, the function under test returns the exact expected outputs or triggers the correct callbacks.
 
