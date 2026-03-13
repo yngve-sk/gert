@@ -91,3 +91,40 @@ The tools used by users or higher-level systems (like Everest) to interact with 
     * `client.stop_experiment(exp_id)`
     * `client.get_status(exp_id)`
 * **`CLI`**: Uses `click` or `typer` to provide terminal commands (`gert start`, `gert stop`, `gert monitor`) that utilize the `GERTClient`.
+
+---
+
+## 8. Directory Structure & Full-Stack Model Sharing
+
+The repository follows a strict directory structure that maps directly to the module boundaries described above. A key architectural benefit of this organization is how the core data models are shared across the entire stack.
+
+Standard Folder Structure
+
+```
+gert/
+├── pyproject.toml
+├── docs/developers/              # Architecture, design rules, roadmap
+├── src/
+│   └── gert/                     # Base Python package
+│       ├── client/               # External Python interfaces (GERTClient, CLI)
+│       ├── experiment_runner/    # psij-python abstraction, RunpathManager
+│       ├── experiments/          # Core Immutable State
+│       │   └── models.py         # Centralized Pydantic models
+│       ├── parameters/           # Prior generation (probabilit integration)
+│       ├── server/               # FastAPI application, routers, WebSockets
+│       ├── storage/              # IngestionReceiver, Polars ConsolidationWorker
+│       └── update/               # Math adapters (iterative_ensemble_smoother)
+└── tests/
+    ├── factories/                # Mock data and hypothesis factories
+    ├── experiments/
+    └── ...
+```
+
+
+Single Source of Truth for Models
+
+The Pydantic models in src/gert/experiments/models.py serve as the absolute single source of truth for both the backend and frontend environments:
+
+For Python Clients (Backend/CLI): Internal server modules and external Python clients (like Everest or the CLI in gert.client) simply import these models natively (from gert.experiments.models import ExperimentConfig).
+
+For Web Frontends (UI): There is no need to manually rewrite these data structures in JavaScript/TypeScript. The FastAPI backend (gert.server) automatically reads the Pydantic models and generates a live OpenAPI (Swagger) JSON schema. Web frontends use tools like openapi-typescript-codegen to automatically generate perfectly typed frontend interfaces directly from this schema.
