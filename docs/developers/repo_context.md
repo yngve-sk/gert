@@ -17,8 +17,7 @@ You are strictly forbidden from generating code based on your general training d
 3. **`interfaces.md`**: The definitive guide to module organization. Use this to determine *where* code belongs.
 4. **`coding_rules.md`**: Strict formatting (`ruff`), type hinting (`mypy`), import conventions, and the rules for testable design.
 5. **`test_strategy.md`**: The testing philosophy utilizing `hypothesis` for property-based testing and `pytest.raises` for fail-fast boundaries.
-6. **`roadmap.md`**: The micro-stepped PR development plan. You must execute work strictly according to the current PR phase.
-7. **`legacy_behavior.md`**: An archive of specific technical debts and tightly-coupled behaviors from legacy ERT that are strictly forbidden.
+6. **`legacy_behavior.md`**: An archive of specific technical debts and tightly-coupled behaviors from legacy ERT that are strictly forbidden.
 
 ---
 
