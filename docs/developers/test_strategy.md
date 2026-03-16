@@ -23,3 +23,6 @@ Integration tests (tests that touch the disk, boot a FastAPI server, or spin up 
     1. A test that blasts 100 sparse JSON payloads to the API and verifies that the `ConsolidationWorker` successfully writes a correct `.parquet` file to disk.
     2. A test that submits a dummy runmodel to the `JobSubmitter` via `psij-python` using a local execution backend to verify the runpath is populated correctly.
 * Do not use integration tests to verify mathematical accuracy; use unit/hypothesis tests for that.
+
+## 5. Prefer snapshot tests for larger objects
+If an object has more than 4 attributes, and you are testing a function f(x) -> [a, b, c, d, ...], prefer doing snapshot tests to assert that given one x, you get out a certain set of outputs. This is better than one assert-line per individual attribute.
