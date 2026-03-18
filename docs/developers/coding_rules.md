@@ -64,3 +64,7 @@ All code must be written so that it is easily and quickly unit-testable. To achi
 * **Isolate I/O from Logic (Functional Core, Imperative Shell):** Functions that perform complex logic, math, or data transformations must not read from disk, make network calls, or fetch their own state. They should accept pure data structures (e.g., DataFrames, Pydantic models) as arguments and return new data structures.
 * **Dependency Injection:** Do not hardcode or instantiate heavy services (like database clients or cluster schedulers) deep inside nested functions. Pass the initialized service (or its abstract interface) in as an argument. This allows the test suite to easily pass in a lightweight, in-memory mock.
 * **Avoid Global State:** Do not use module-level mutable variables. State must be explicitly passed through function arguments.
+
+## 11. Misc
+* Always respect this: An exception must not use a string literal for its message, assign the literal to variable first.
+* Don't write redundant comments. Prefer only commenting where necessary. Inline comments should always be there to explain the purpose of the line below. But if the purpose can be explained from code, leave it uncommented.
