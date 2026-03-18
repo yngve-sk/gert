@@ -26,3 +26,9 @@ Integration tests (tests that touch the disk, boot a FastAPI server, or spin up 
 
 ## 5. Prefer snapshot tests for larger objects
 If an object has more than 4 attributes, and you are testing a function f(x) -> [a, b, c, d, ...], prefer doing snapshot tests to assert that given one x, you get out a certain set of outputs. This is better than one assert-line per individual attribute.
+
+## 6. Don't do this:
+* Asserting the length of a list if there is already an assertion on the items of a list.
+* Prefer assert a == [] over assert len(a) == 0
+* Avoid redundant comments, only keep a comment if it adds value. If it is an internal note of what's happening, remove it and rather make the code clear so it is understandable.
+* If you expect an expression to execute without raising an error, it is OK to simply evaluate the expression. DO NOT do a try-except and set a boolean in the except, only to assert it thereafter.
