@@ -15,7 +15,7 @@ This document outlines the core architectural constraints and design rules that 
 * **Explanation:** The runner strictly consumes deterministic, pre-calculated `ParameterMatrix` objects. The generation of these matrices (via `probabilit` or user injection) must happen in an isolated `gert.parameters` module before execution begins.
 
 ### Rule 4: API-Driven Persistent Storage
-* **Statement:** The temporary execution scratch space (runpath) is strictly separated from permanent analytical storage.
+* **Statement:** The temporary execution scratch space (realization workdirs) is strictly separated from permanent analytical storage.
 * **Explanation:** The execution engine does not manage permanent files on disk. Instead, forward models (or post-run scripts) must push their data directly to the Data Ingestion API. The storage backend (`gert.storage`) isolates how that data is queued (`.jsonl`) and consolidated (Parquet).
 
 ### Rule 5: Abstraction of HPC / Compute Environments

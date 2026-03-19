@@ -136,9 +136,9 @@ class QueueConfig(BaseModel):
     custom_attributes: dict[str, Any] = Field(default_factory=dict)
 
 
-class RunpathFile(BaseModel):
+class RealizationWorkdirFile(BaseModel):
     """A static file or directory to be injected into the realization's
-    execution runpath.
+    execution workdir.
     """
 
     source: str
@@ -146,7 +146,7 @@ class RunpathFile(BaseModel):
 
 
 class Template(BaseModel):
-    """A text template rendered into the realization's runpath.
+    """A text template rendered into the realization's workdir.
 
     Uses standard engines (like Jinja2) to replace variables (e.g., `{{ MULTFLT }}`)
     with the current realization's parameter values.
@@ -174,7 +174,7 @@ class ExperimentConfig(BaseModel):
 
     name: str
 
-    runpath_files: list[RunpathFile] = Field(default_factory=list)
+    workdir_files: list[RealizationWorkdirFile] = Field(default_factory=list)
     templates: list[Template] = Field(default_factory=list)
     forward_model_steps: list[ExecutableForwardModelStep | PluginForwardModelStep]
     lifecycle_hooks: list[ExecutableHook | PluginHook] = Field(default_factory=list)

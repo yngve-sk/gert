@@ -13,8 +13,8 @@ from .models import (
     PluginForwardModelStep,
     PluginHook,
     QueueConfig,
+    RealizationWorkdirFile,
     ResponsePayload,
-    RunpathFile,
     Template,
 )
 
@@ -33,7 +33,7 @@ __all__ = [
     "PluginForwardModelStep",
     "PluginHook",
     "QueueConfig",
+    "RealizationWorkdirFile",
     "ResponsePayload",
-    "RunpathFile",
     "Template",
 ]

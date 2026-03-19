@@ -23,7 +23,7 @@ GERT operates as a distributed system composed of specific, decoupled services:
 ## 4. The Forward Model & Execution
 * **Sequential Steps:** The forward model consists of several sequential steps specified in the runmodel config.
 * **Job Submission:** Forward models are executed using `psij-python`. The "queue config" maps to inputs for `psij-python`, abstracting away cluster-specific schedulers (LSF, Slurm, OpenPBS) or local shells.
-* **Runpath Lifecycle & Optional GC:** Executions utilize a temporary runpath (e.g., `realization-n/iteration-n` on scratch disk) injected with exact parameter values. Because vital data is pushed to storage, GERT supports an **optional garbage collection** policy to clean up temporary runpaths after a successful realization.
+* **Realization Workdir Lifecycle & Optional GC:** Executions utilize a temporary directory (e.g., `realization-n/iteration-n` on scratch disk) injected with exact parameter values. Because vital data is pushed to storage, GERT supports an **optional garbage collection** policy to clean up temporary workdirs after a successful realization.
 
 ## 5. Data Ingestion & Storage (Incremental & Persistent)
 * **Long-Running Service:** Permanent "dark storage" relies on the Storage Server, booted at experiment start and kept active throughout the lifecycle.

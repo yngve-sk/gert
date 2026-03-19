@@ -21,7 +21,7 @@ Integration tests (tests that touch the disk, boot a FastAPI server, or spin up 
 * **The Goal:** Integration tests in GERT are only used to verify the "Glue" between major components.
 * **Examples of valid integration tests:**
     1. A test that blasts 100 sparse JSON payloads to the API and verifies that the `ConsolidationWorker` successfully writes a correct `.parquet` file to disk.
-    2. A test that submits a dummy runmodel to the `JobSubmitter` via `psij-python` using a local execution backend to verify the runpath is populated correctly.
+    2. A test that submits a dummy runmodel to the `JobSubmitter` via `psij-python` using a local execution backend to verify the workdirs are populated correctly.
 * Do not use integration tests to verify mathematical accuracy; use unit/hypothesis tests for that.
 
 ## 5. Prefer snapshot tests for larger objects

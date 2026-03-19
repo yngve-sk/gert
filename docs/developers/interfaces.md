@@ -40,9 +40,9 @@ This module acts as the conductor. It reads the config, sets up the environments
 * **`JobSubmitter` (Interface wrapping `psij-python`)**
     * `submit_realization(realization_id: int, execution_steps: List[Step], queue_config: dict) -> str` (Returns backend job ID)
     * `cancel_all_jobs(experiment_id: str)`: Hard blocking function to clear the cluster queue.
-* **`RunpathManager`**
-    * `create_scratch_dir(iteration: int, realization: int, parameters: dict) -> Path`
-    * `cleanup_scratch_dir(iteration: int, realization: int)` (Optional GC)
+* **`RealizationWorkdirManager`**
+    * `create_workdir(iteration: int, realization: int, parameters: dict) -> Path`
+    * `cleanup_workdir(iteration: int, realization: int)` (Optional GC)
 * **`HookManager`**
     * `execute_hook(hook_type: HookEnum, config: dict)`: Runs generic pre/post scripts.
 
@@ -107,7 +107,7 @@ gert/
 ├── src/
 │   └── gert/                     # Base Python package
 │       ├── client/               # External Python interfaces (GERTClient, CLI)
-│       ├── experiment_runner/    # psij-python abstraction, RunpathManager
+│       ├── experiment_runner/    # psij-python abstraction, RealizationWorkdirManager
 │       ├── experiments/          # Core Immutable State
 │       │   └── models.py         # Centralized Pydantic models
 │       ├── parameters/           # Prior generation (probabilit integration)

@@ -41,17 +41,17 @@ This document outlines the strategic, phased approach for building GERT (Generic
 ## Phase 3: Execution & Orchestration
 **Goal:** Connect GERT to compute resources and run a "blind" forward model.
 
-* **PR 3.1: Runpath Management**
-    * Implement `RunpathManager` to create temporary scratch directories and inject exact parameters from the `ParameterMatrix`.
+* **PR 3.1: Realization Working Directory Management**
+    * Implement `RealizationWorkDirManager` to create temporary scratch directories and inject exact parameters from the `ParameterMatrix`.
     * Write unit tests verifying file creation and optional GC cleanup.
 * **PR 3.2: Job Submitter (`psij-python`)**
     * Implement `JobSubmitter` using `psij-python` for local/cluster abstraction.
     * Write mocked unit tests verifying `psij` adapter calls.
 * **PR 3.3: Experiment Orchestrator**
-    * Implement `ExperimentOrchestrator` to coordinate the runpath and job submission based on the `ExperimentConfig`.
+    * Implement `ExperimentOrchestrator` to coordinate the realization workdirs and job submission based on the `ExperimentConfig`.
     * Wire up the `/start` endpoint.
 * **PR 3.4: End-to-End Local Execution**
-    * Write a minimal integration test: Submit an experiment with a dummy Python forward model that reads the runpath and pushes data to the Ingestion API.
+    * Write a minimal integration test: Submit an experiment with a dummy Python forward model that reads the realization workdir and pushes data to the Ingestion API.
 
 ---
 

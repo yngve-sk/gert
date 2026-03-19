@@ -284,3 +284,7 @@ Parse-Time Evaluation of Error Modes
 ## Behaviors likely to affect new test design
 - Ensure tests for parsing `GeneralObservation` provide flat arrays with even lengths, checking `[::2]` and `[1::2]` slicing logic.
 - Ensure the `LOG10_` variables are explicitly asserted in parameter export integration tests.
+
+
+### Misc
+- runpath is just the working directory of each realization in ERT.
