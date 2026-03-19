@@ -71,3 +71,4 @@ All code must be written so that it is easily and quickly unit-testable. To achi
 * Always specify return types, including None of __init__
 * Don't use boolean positional arguments in function definitions, prefer doing a *, first, so kwarg usage is enforced
 * Respect a maximum line length of 88, never create lines longer than this.
+* Write at most 2 expressions in an assertion, respecting PT018.
