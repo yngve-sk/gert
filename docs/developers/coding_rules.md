@@ -70,3 +70,4 @@ All code must be written so that it is easily and quickly unit-testable. To achi
 * Don't write redundant comments. Prefer only commenting where necessary. Inline comments should always be there to explain the purpose of the line below. But if the purpose can be explained from code, leave it uncommented.
 * Always specify return types, including None of __init__
 * Don't use boolean positional arguments in function definitions, prefer doing a *, first, so kwarg usage is enforced
+* Respect a maximum line length of 88, never create lines longer than this.
