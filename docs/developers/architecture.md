@@ -64,3 +64,8 @@ GERT operates as a distributed system composed of specific, decoupled services:
 
 ## 12. Testing & Data Mocking Strategy
 * **Strict Separation of Concerns:** Test orchestration and mock data generation are strictly kept out of the production application code.
+
+## 13. Misc
+* Iterations and realization nrs may never be negative, and these cases should not be tested, but rather guarded against.
+* experiments / ensembles are identified by uuids
+* Names of things, experiments, ensembles, parameters, observations, responses should be sensible and not contain obscure or bizzarre characters, and it is OK to enforce this in GERT.
