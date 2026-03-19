@@ -288,3 +288,4 @@ Parse-Time Evaluation of Error Modes
 
 ### Misc
 - runpath is just the working directory of each realization in ERT.
+- parameters.json dump into the runpath is an anti pattern and should not be done in GERT.
