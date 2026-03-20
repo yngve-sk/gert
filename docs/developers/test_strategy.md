@@ -38,3 +38,20 @@ If an object has more than 4 attributes, and you are testing a function f(x) -> 
 * If you expect an expression to execute without raising an error, it is OK to simply evaluate the expression. DO NOT do a try-except and set a boolean in the except, only to assert it thereafter.
 * If you create new files, always use a fixture for changing to tmpdir
 * Create tmpdirs explicitly in parametrized tests, don't use function-scoped fixtures.
+
+## 8. Whole-Object Assertions
+* **Assert Against Complete Expected Objects:** When testing functions that return complex objects, construct the complete expected object and assert equality, rather than checking individual fields.
+* **Good:**
+  ```python
+  result = my_function(input_data)
+  expected = SomeClass(field1=value1, field2=value2, field3=value3)
+  assert result == expected
+  ```
+* **Bad:**
+  ```python
+  result = my_function(input_data)
+  assert result.field1 == value1
+  assert result.field2 == value2
+  assert result.field3 == value3
+  ```
+* **Why:** Whole-object assertions are more concise, catch unexpected fields, and make it obvious what the complete expected output should be.
