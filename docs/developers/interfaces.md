@@ -36,7 +36,7 @@ This module acts as the conductor. It reads the config, sets up the environments
 * **`ExperimentOrchestrator`**
     * `start_experiment(config: ExperimentConfig)`
     * `run_iteration(iteration: int, parameters: ParameterMatrix)`
-    * `trigger_manual_restart(realization_id: int)`
+    * `run_realization(realization_id: int, iteration: int)`
 * **`JobSubmitter` (Interface wrapping `psij-python`)**
     * `submit(execution_steps: List[Step], queue_config: dict) -> str` (Returns backend job ID)
     * `cancel_all_jobs(experiment_id: str)`: Hard blocking function to clear the cluster queue.
