@@ -61,3 +61,6 @@ If an object has more than 4 attributes, and you are testing a function f(x) -> 
 - **Mock Only:** Slow external services (HTTP APIs, HPC clusters), non-deterministic sources (timestamps, random), or dangerous operations (file deletion).
 - **Don't Mock:** File system operations, subprocess calls to local tools, or your own classes.
 - **The "Executable Outputs" Rule:** For components that create files or execute commands, write at least one test verifying real outputs, not just mock calls.
+
+## 10. Avoid Sleep - Use Deterministic Waiting
+- **Never use `time.sleep()`:** Replace arbitrary sleep calls with deterministic waiting mechanisms using `asyncio.wait_for()`, polling with exponential backoff, or test fixtures that explicitly wait for conditions (e.g., file existence, API responses) before proceeding.
