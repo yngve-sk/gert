@@ -59,6 +59,7 @@ All developers must install and use the `pre-commit` framework to ensure no malf
 Code must not only pass syntax and linting checks but also adhere to the structural boundaries defined in the repository context:
 * Verify your module dependencies against `interfaces.md`.
 * Ensure your logic adheres strictly to `design_rules.md` (e.g., maintaining domain agnosticism and immutability).
+**Configuration Immutability Pattern:** Objects that require configuration should receive their configuration parameters during initialization and store them immutably, rather than accepting configuration as arguments to operational methods. This ensures clear ownership, prevents configuration drift, and makes the object's behavior predictable throughout its lifetime.
 
 ## 10. Design for Testability
 All code must be written so that it is easily and quickly unit-testable. To achieve this, strictly follow these patterns:
