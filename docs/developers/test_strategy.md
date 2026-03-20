@@ -55,3 +55,9 @@ If an object has more than 4 attributes, and you are testing a function f(x) -> 
   assert result.field3 == value3
   ```
 * **Why:** Whole-object assertions are more concise, catch unexpected fields, and make it obvious what the complete expected output should be.
+
+## 9. Mock Sparingly - Test Real Behavior
+- **Prefer Real Execution:** For I/O, file operations, and tool execution, test real behavior over mocking when operations are fast (< 100ms).
+- **Mock Only:** Slow external services (HTTP APIs, HPC clusters), non-deterministic sources (timestamps, random), or dangerous operations (file deletion).
+- **Don't Mock:** File system operations, subprocess calls to local tools, or your own classes.
+- **The "Executable Outputs" Rule:** For components that create files or execute commands, write at least one test verifying real outputs, not just mock calls.
