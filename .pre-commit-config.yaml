@@ -27,6 +27,7 @@ repos:
           - pydantic
           - fastapi
           - pytest
+          - hypothesis
         # Ensure mypy checks all files, not just changed ones
         pass_filenames: false
         args: ["--strict", "src/gert", "tests"]
