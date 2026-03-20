@@ -36,6 +36,7 @@ All developers must install and use the `pre-commit` framework to ensure no malf
 * **Avoid Single-Usage Functions:** Do not create standalone, module-level helper functions if they are only ever called from one place. Keep the logic where it belongs.
 * **Nested Functions for Readability:** As an exception to the above, if a single function's execution flow becomes highly complex or difficult to read, creating a single-use *nested function* (a closure defined inside the parent function) is encouraged to give that block of logic a descriptive name and isolate its scope.
 * **Pragmatic DRY (Don't Repeat Yourself):** While DRY is a good principle, do not over-abstract. If the repeated logic is trivial (e.g., a simple list comprehension, dictionary extraction, or basic arithmetic), prefer to keep it "WET" (Write Everything Twice) and inline. Creating a dedicated function for a simple one-liner hurts readability by forcing the reader to jump around the file.
+* The JobSubmitter operates as a stateless adapter focused solely on translating execution commands and queue configurations to the scheduler backend - it deliberately ignores experiment-specific identifiers to maintain reusability across different orchestration contexts.
 
 ## 6. Import Conventions
 * **No Relative Parent Imports:** The use of relative parent imports (`from .. import x` or `from ...module import y`) is strictly disallowed. Always use absolute imports for cross-module boundaries (e.g., `from gert.storage.api import x`).
