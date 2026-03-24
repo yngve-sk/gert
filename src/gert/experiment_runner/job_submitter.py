@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from datetime import timedelta
+from pathlib import Path
 
 import psij
 
@@ -26,16 +27,18 @@ class JobSubmitter:
     def submit(
         self,
         execution_steps: list[str],
+        directory: Path | None = None,
     ) -> str:
         """Submit a job using the configured queue settings.
 
         Args:
             execution_steps: List of shell commands to execute sequentially.
+            directory: The directory to execute the job in.
 
         Returns:
             The job ID from the backend scheduler.
         """
-        job_spec = self._translate_to_psij_spec(execution_steps)
+        job_spec = self._translate_to_psij_spec(execution_steps, directory=directory)
         job = psij.Job(job_spec)
         self._executor.submit(job)
         return str(job.id)
@@ -43,11 +46,13 @@ class JobSubmitter:
     def _translate_to_psij_spec(
         self,
         execution_steps: list[str],
+        directory: Path | None = None,
     ) -> psij.JobSpec:
         """Translate GERT queue config into psij JobSpec.
 
         Args:
             execution_steps: List of shell commands to execute sequentially.
+            directory: The directory to execute the job in.
 
         Returns:
             A psij JobSpec ready for submission.
@@ -93,6 +98,7 @@ class JobSubmitter:
             resources=resources,
             attributes=attributes,
             name=job_name,
+            directory=directory,
         )
 
     def _parse_memory_string(self, memory_str: str) -> int:

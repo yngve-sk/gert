@@ -220,3 +220,8 @@ class FileParameterIngestionPayload(BaseModel):
     source_step: str
     key: str | dict[str, str]
     value: FileReference
+
+
+IngestionPayload: TypeAlias = (
+    ResponsePayload | InlineParameterIngestionPayload | FileParameterIngestionPayload
+)
