@@ -87,3 +87,7 @@ If an object has more than 4 attributes, and you are testing a function f(x) -> 
 
 ### 15. pre-commit must pass
 * All code must pass pre-commit validation before submission.
+
+### Single Responsibility Tests
+
+**Prefer single-purpose unit tests when possible.** Split tests with "and" in their names into focused tests and extract shared data into fixtures. Integration tests may naturally test multiple behaviors together.
