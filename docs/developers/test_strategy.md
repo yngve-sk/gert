@@ -64,3 +64,26 @@ If an object has more than 4 attributes, and you are testing a function f(x) -> 
 
 ## 10. Avoid Sleep - Use Deterministic Waiting
 - **Never use `time.sleep()`:** Replace arbitrary sleep calls with deterministic waiting mechanisms using `asyncio.wait_for()`, polling with exponential backoff, or test fixtures that explicitly wait for conditions (e.g., file existence, API responses) before proceeding.
+
+### 11. Avoid Dummy Forward Models
+**Generate test models inline within test code rather than creating separate dummy files in .`tests/`**
+- Keep test dependencies self-contained and explicit
+- Reduce maintenance overhead of orphaned test files
+
+### 12. Parquet Assertion Best Practices
+**Assert against `.to_dict()` dumps for complete DataFrame validation, not individual columns.**
+- Ensures comprehensive data integrity checks
+- Reduces assertion verbosity and improves readability
+
+### 13. Prefer Set Equality Over Multiple Assertions
+**Use direct set comparison instead of separate length, min, and max assertions.**
+- Replace multiple range validation assertions with `set(actual) == set(expected)`
+- Provides clearer intent and more precise failure messages
+
+### 14. General Principle: Choose Precision Over Verbosity
+**Favor single, comprehensive assertions that capture the complete expected state rather than multiple partial checks.**
+- More maintainable and expressive test code
+- Clearer failure diagnostics when tests break
+
+### 15. pre-commit must pass
+* All code must pass pre-commit validation before submission.
