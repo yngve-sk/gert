@@ -20,7 +20,8 @@ dependencies = [
     "pyarrow>=13.0",    # Required for Polars Parquet support
     "psij-python>=0.1", # HPC job submission abstraction
     "websockets>=11.0",
-    "pluggy>=1.6.0"
+    "pluggy>=1.6.0",
+    "rich>=13.0"
 ]
 
 [project.scripts]
@@ -172,7 +173,16 @@ disable_error_code = ["untyped-decorator"]
 
 # For psij (ignore missing imports)
 [[tool.mypy.overrides]]
-module = ["psij", "psij.*", "hypothesis", "hypothesis.*"]
+module = [
+    "psij",
+    "psij.*",
+    "hypothesis",
+    "hypothesis.*",
+    "websockets",
+    "websockets.*",
+    "rich",
+    "rich.*",
+]
 ignore_missing_imports = true
 
 [tool.uv]

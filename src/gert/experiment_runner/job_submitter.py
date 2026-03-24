@@ -1,6 +1,6 @@
 """Job submission adapter for psij-python integration."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from pathlib import Path
 
@@ -28,18 +28,22 @@ class JobSubmitter:
         self,
         execution_steps: list[str],
         directory: Path | None = None,
+        status_callback: Callable[[psij.Job, psij.JobStatus], None] | None = None,
     ) -> str:
         """Submit a job using the configured queue settings.
 
         Args:
             execution_steps: List of shell commands to execute sequentially.
             directory: The directory to execute the job in.
+            status_callback: Optional callback for job status changes.
 
         Returns:
             The job ID from the backend scheduler.
         """
         job_spec = self._translate_to_psij_spec(execution_steps, directory=directory)
         job = psij.Job(job_spec)
+        if status_callback:
+            job.set_job_status_callback(status_callback)
         self._executor.submit(job)
         return str(job.id)
 
