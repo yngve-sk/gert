@@ -4,7 +4,14 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi import Path as FastApiPath
 from pydantic import BaseModel, Field
 
@@ -12,6 +19,7 @@ from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrato
 from gert.experiment_runner.job_submitter import JobSubmitter
 from gert.experiment_runner.realization_workdir_manager import RealizationWorkdirManager
 from gert.experiments.models import ExperimentConfig, IngestionPayload
+from gert.server.monitoring import RealizationStatus, monitoring_service
 from gert.storage.consolidation import ConsolidationWorker
 from gert.storage.ingestion import IngestionReceiver
 from gert.storage.query import StorageQueryAPI
@@ -97,12 +105,76 @@ async def start_experiment(
         executor_type=config.queue_config.backend,
     )
     workdir_manager = RealizationWorkdirManager(BASE_STORAGE_PATH / "workdirs")
-    orchestrator = ExperimentOrchestrator(job_submitter, workdir_manager)
 
+    execution_id_ref = {"id": ""}
+
+    def _monitoring_cb(
+        realization_id: int,
+        iteration: int,
+        current_status: str,
+    ) -> None:
+        monitoring_service.update_status(
+            experiment_id=execution_id_ref["id"],
+            realization_id=realization_id,
+            iteration=iteration,
+            status=current_status,
+        )
+
+    orchestrator = ExperimentOrchestrator(
+        job_submitter,
+        workdir_manager,
+        monitoring_callback=_monitoring_cb,
+    )
     new_id = orchestrator.start_experiment(config)
+    execution_id_ref["id"] = new_id
+
+    # Initialize statuses as PENDING
+    # Determine unique realizations
+    realizations: set[int] = set()
+    if config.parameter_matrix.values:
+        for payload in config.parameter_matrix.values.values():
+            realizations.update(payload.keys())
+
+    for r_id in realizations:
+        monitoring_service.update_status(new_id, r_id, 0, "PENDING")
+
     orchestrator.run_iteration(iteration=0, parameters=config.parameter_matrix)
 
     return {"status": "started", "experiment_id": new_id}
+
+
+@router.get(
+    "/experiments/{id}/status",
+    summary="Get execution status",
+    description="Returns the execution status of all realizations for an experiment.",
+)
+async def get_experiment_status(
+    experiment_id: Annotated[str, FastApiPath(alias="id")],
+) -> list[RealizationStatus]:
+    """Get the current execution status."""
+    return monitoring_service.get_experiment_status(experiment_id)
+
+
+@router.websocket("/experiments/{id}/monitor")
+async def monitor_experiment(
+    websocket: WebSocket,
+    experiment_id: Annotated[str, FastApiPath(alias="id")],
+) -> None:
+    """Real-time monitoring via WebSocket."""
+    await websocket.accept()
+    queue = await monitoring_service.subscribe(experiment_id)
+
+    # Send initial state
+    initial_states = monitoring_service.get_experiment_status(experiment_id)
+    for state in initial_states:
+        await websocket.send_json(state.model_dump())
+
+    try:
+        while True:
+            state = await queue.get()
+            await websocket.send_json(state.model_dump())
+    except WebSocketDisconnect:
+        monitoring_service.unsubscribe(experiment_id, queue)
 
 
 # Storage Dependencies
@@ -138,6 +210,25 @@ async def ingest_data(
 ) -> dict[str, str]:
     """Ingest a payload for a given experiment."""
     receiver.receive(experiment_id, payload)
+
+    last_name = None
+    last_value = None
+    if hasattr(payload, "key") and hasattr(payload, "value"):
+        key = payload.key
+        if isinstance(key, dict):
+            last_name = ", ".join(f"{k}={v}" for k, v in key.items())
+        else:
+            last_name = str(key)
+
+        val = payload.value
+        last_value = str(val.path) if hasattr(val, "path") else str(val)
+
+    monitoring_service.increment_responses(
+        experiment_id,
+        payload.realization,
+        last_response_name=last_name,
+        last_response_value=last_value,
+    )
     return {"status": "accepted"}
 
 

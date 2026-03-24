@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 import httpx
 import uvicorn
 
+from gert.monitor import start_monitor
+
 
 def _get_expected_realizations(config_data: dict[str, Any]) -> int:
     """Calculate the number of unique realizations expected."""
@@ -123,6 +125,7 @@ def run_experiment(
     api_url: str,
     *,
     wait_for_completion: bool = False,
+    monitor: bool = False,
 ) -> None:
     """Run an experiment by submitting it to the GERT API."""
     config_data = _load_config(config_path)
@@ -145,7 +148,10 @@ def run_experiment(
             execution_id = response.json()["experiment_id"]
             print(f"✅ Execution started (Execution ID: {execution_id})")
 
-            if server_process is not None or wait_for_completion:
+            if monitor:
+                expected_count = _get_expected_realizations(config_data)
+                start_monitor(api_url, execution_id, expected_count)
+            elif server_process is not None or wait_for_completion:
                 expected_count = _get_expected_realizations(config_data)
                 _poll_for_completion(client, execution_id, expected_count)
             else:
@@ -205,6 +211,11 @@ def main() -> None:
         action="store_true",
         help="Wait for the experiment to complete",
     )
+    run_parser.add_argument(
+        "--monitor",
+        action="store_true",
+        help="Open the live monitor dashboard for this run",
+    )
 
     # `gert server`
     server_parser = subparsers.add_parser("server", help="Start the GERT API server")
@@ -225,10 +236,31 @@ def main() -> None:
         help="Enable auto-reload for development",
     )
 
+    # `gert monitor`
+    monitor_parser = subparsers.add_parser(
+        "monitor",
+        help="Monitor an running GERT experiment",
+    )
+    monitor_parser.add_argument(
+        "experiment_id",
+        type=str,
+        help="The ID of the experiment to monitor",
+    )
+    monitor_parser.add_argument(
+        "--api-url",
+        default="http://localhost:8000",
+        help="Base URL of the GERT server (default: http://localhost:8000)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "run":
-        run_experiment(args.config, args.api_url, wait_for_completion=args.wait)
+        run_experiment(
+            args.config,
+            args.api_url,
+            wait_for_completion=args.wait,
+            monitor=args.monitor,
+        )
     elif args.command == "server":
         print(f"Starting GERT server on {args.host}:{args.port}...")
         uvicorn.run(
@@ -237,6 +269,8 @@ def main() -> None:
             port=args.port,
             reload=args.reload,
         )
+    elif args.command == "monitor":
+        start_monitor(args.api_url, args.experiment_id)
 
 
 if __name__ == "__main__":

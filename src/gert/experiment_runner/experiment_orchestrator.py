@@ -1,6 +1,9 @@
 """Orchestrator for coordinating experiment execution lifecycle."""
 
 import uuid
+from collections.abc import Callable
+
+import psij
 
 from gert.experiments.models import (
     ExecutableForwardModelStep,
@@ -23,15 +26,18 @@ class ExperimentOrchestrator:
         self,
         job_submitter: JobSubmitter,
         workdir_manager: RealizationWorkdirManager,
+        monitoring_callback: Callable[[int, int, str], None] | None = None,
     ) -> None:
         """Initialize the orchestrator with required dependencies.
 
         Args:
             job_submitter: Interface for submitting jobs to the execution backend.
             workdir_manager: Manager for creating and managing execution workdirs.
+            monitoring_callback: Optional callback to notify about job status changes.
         """
         self._job_submitter = job_submitter
         self._workdir_manager = workdir_manager
+        self._monitoring_callback = monitoring_callback
         self._config: ExperimentConfig | None = None
         self._experiment_id: str | None = None
         self._current_parameters: ParameterMatrix | None = None
@@ -127,4 +133,12 @@ class ExperimentOrchestrator:
                     cmd_parts.append(replaced_arg)
                 execution_steps.append(" ".join(cmd_parts))
 
-        self._job_submitter.submit(execution_steps=execution_steps, directory=workdir)
+        def _status_cb(_job: psij.Job, status: psij.JobStatus) -> None:
+            if self._monitoring_callback:
+                self._monitoring_callback(realization_id, iteration, status.state.name)
+
+        self._job_submitter.submit(
+            execution_steps=execution_steps,
+            directory=workdir,
+            status_callback=_status_cb,
+        )
