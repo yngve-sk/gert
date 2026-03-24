@@ -160,11 +160,12 @@ mypy_path = "src"
 
 
 [[tool.mypy.overrides]]
-# Ignore missing stubs for external libraries if they don't provide them
-module = [
-    "psij.*",
-    "polars.*"
-]
+module = ["tests.*"]
+disable_error_code = ["untyped-decorator"]
+
+# For psij (ignore missing imports)
+[[tool.mypy.overrides]]
+module = ["psij", "psij.*", "hypothesis", "hypothesis.*"]
 ignore_missing_imports = true
 
 [tool.uv]
