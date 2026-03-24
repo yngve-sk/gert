@@ -138,8 +138,14 @@ allowed-confusables = ["–"]
     "RUF052",  # used-dummy-variable
     "RUF045",  # implicit-class-var-in-dataclass
     "ASYNC240", # blocking-path-method-in-async-function
-        "T201",    # print found (allowed in tests for debugging/output)
-
+    "T201",    # print found (allowed in tests for debugging/output)
+]
+"src/gert/__main__.py" = [
+    "T201",    # print found (allowed for CLI output)
+]
+"examples/*" = [
+    "T201",    # print found (allowed for examples)
+    "INP001",  # Implicit namespace package
 ]
 
 [tool.ruff.lint.pylint]
