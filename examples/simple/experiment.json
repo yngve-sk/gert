@@ -1,0 +1,46 @@
+{
+  "name": "simple-polynomial-example",
+  "forward_model_steps": [
+    {
+      "name": "simple_polynomial",
+      "executable": "simple_polynomial.py",
+      "args": [
+        "--experiment-id",
+        "{experiment_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}"
+      ]
+    }
+  ],
+  "queue_config": {
+    "backend": "local",
+    "custom_attributes": {}
+  },
+  "parameter_matrix": {
+    "metadata": {
+      "MULTFLT": {
+        "source": "prior",
+        "updatable": true
+      }
+    },
+    "values": {
+      "MULTFLT": {
+        "0": 1.0,
+        "1": 2.0,
+        "2": 3.0
+      }
+    },
+    "datasets": []
+  },
+  "observations": [
+    {
+      "key": {
+        "response": "FOPR"
+      },
+      "value": 100.0,
+      "std_dev": 10.0
+    }
+  ]
+}
