@@ -31,6 +31,7 @@ All developers must install and use the `pre-commit` framework to ensure no malf
 * **Classes & Exceptions:** `PascalCase`
 * **Constants:** `UPPER_SNAKE_CASE` (Defined at the module level).
 * **Private/Internal Members:** Prefix internal module functions, methods, or variables with a single underscore (e.g., `_internal_method()`). This explicitly signals to external clients (like Everest) not to use them.
+* **Descriptive Names:** Use descriptive, domain-specific names that clearly indicate the component's purpose within GERT's architecture rather than generic terms.
 
 ## 5. Function Design & Abstraction
 * **Avoid Single-Usage Functions:** Do not create standalone, module-level helper functions if they are only ever called from one place. Keep the logic where it belongs.
