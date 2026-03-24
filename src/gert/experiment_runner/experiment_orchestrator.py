@@ -36,7 +36,10 @@ class ExperimentOrchestrator:
         self._experiment_id: str | None = None
         self._current_parameters: ParameterMatrix | None = None
 
-    def start_experiment(self, config: ExperimentConfig) -> str:
+    def start_experiment(
+        self,
+        config: ExperimentConfig,
+    ) -> str:
         """Start a new experiment execution based on the config.
 
         Args:
@@ -104,7 +107,7 @@ class ExperimentOrchestrator:
             msg = f"Iteration number must be >= 0, got: {iteration}"
             raise ValueError(msg)
 
-        _workdir = self._workdir_manager.create_workdir(
+        workdir = self._workdir_manager.create_workdir(
             experiment_id=self._experiment_id,
             iteration=iteration,
             realization=realization_id,
@@ -114,7 +117,14 @@ class ExperimentOrchestrator:
         for step in self._config.forward_model_steps:
             if isinstance(step, ExecutableForwardModelStep):
                 cmd_parts = [step.executable]
-                cmd_parts.extend(step.args)
+                for arg in step.args:
+                    # Replace standard placeholders
+                    replaced_arg = (
+                        arg.replace("{experiment_id}", self._experiment_id)
+                        .replace("{iteration}", str(iteration))  # noqa: RUF027
+                        .replace("{realization}", str(realization_id))
+                    )
+                    cmd_parts.append(replaced_arg)
                 execution_steps.append(" ".join(cmd_parts))
 
-        self._job_submitter.submit(execution_steps=execution_steps)
+        self._job_submitter.submit(execution_steps=execution_steps, directory=workdir)
