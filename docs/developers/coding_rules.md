@@ -76,3 +76,4 @@ All code must be written so that it is easily and quickly unit-testable. To achi
 * Respect a maximum line length of 88, never create lines longer than this.
 * Write at most 2 expressions in an assertion, respecting PT018.
 * All code must pass pre-commit validation before submission.
+* Dont do local imports unless necessary
