@@ -110,6 +110,7 @@ allowed-confusables = ["–"]
 "tests/*" = [
     "S101",    # Use of assert detected (allowed in tests)
     "D",       # All pydocstyle rules (docstring conventions - tests often don't need extensive docs)
+    "TC003",   # Move standard library import into a type-checking block
     "INP001",  # File is part of an implicit namespace package. Add an `__init__.py`. (not needed for tests)
     "ANN001",  # Missing type annotation for function argument (test functions often don't need full annotations)
     "ANN201",  # Missing return type annotation for public function
