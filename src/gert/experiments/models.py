@@ -1,6 +1,7 @@
 """Core immutable data models for GERT experiments."""
 
 from enum import Enum
+from pathlib import Path
 from typing import Any, TypeAlias
 
 from pydantic import BaseModel, Field, PositiveFloat, model_validator
@@ -173,6 +174,16 @@ class ExperimentConfig(BaseModel):
     """Immutable root configuration for a GERT experiment."""
 
     name: str
+    base_working_directory: Path
+
+    storage_base: Path = Field(default_factory=lambda: Path("./gert_storage"))
+    realization_workdirs_base: Path = Field(
+        default_factory=lambda: Path("./gert_storage/workdirs"),
+    )
+    consolidation_interval: float = Field(
+        default=5.0,
+        description="Interval in seconds for background consolidation",
+    )
 
     workdir_files: list[RealizationWorkdirFile] = Field(default_factory=list)
     templates: list[Template] = Field(default_factory=list)
@@ -181,6 +192,19 @@ class ExperimentConfig(BaseModel):
     queue_config: QueueConfig
     parameter_matrix: ParameterMatrix
     observations: list[Observation]
+
+    @model_validator(mode="after")
+    def resolve_paths(self) -> Self:
+        """Resolve storage and workdir paths relative to base_working_directory."""
+        if not self.storage_base.is_absolute():
+            self.storage_base = (
+                self.base_working_directory / self.storage_base
+            ).resolve()
+        if not self.realization_workdirs_base.is_absolute():
+            self.realization_workdirs_base = (
+                self.base_working_directory / self.realization_workdirs_base
+            ).resolve()
+        return self
 
 
 class ResponsePayload(BaseModel):

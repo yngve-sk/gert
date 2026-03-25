@@ -9,8 +9,8 @@
         "{experiment_id}",
         "--realization",
         "{realization}",
-        "--iteration",
-        "{iteration}"
+        "--ensemble-id",
+        "{ensemble_id}"
       ]
     }
   ],

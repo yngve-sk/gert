@@ -21,17 +21,23 @@ class IngestionReceiver:
         self._base_storage_path = base_storage_path
         self._base_storage_path.mkdir(parents=True, exist_ok=True)
 
-    def receive(self, experiment_id: str, payload: IngestionPayload) -> None:
-        """Append an ingestion payload to the experiment's .jsonl queue.
+    def receive(
+        self,
+        experiment_id: str,
+        ensemble_id: str,
+        payload: IngestionPayload,
+    ) -> None:
+        """Append an ingestion payload to the experiment ensemble's .jsonl queue.
 
         Args:
             experiment_id: The unique ID of the experiment.
+            ensemble_id: The unique ID of the ensemble.
             payload: The ingestion payload to store.
 
         Raises:
             TypeError: If the payload is not a Pydantic model.
         """
-        queue_dir = self._base_storage_path / experiment_id
+        queue_dir = self._base_storage_path / experiment_id / ensemble_id
         queue_dir.mkdir(parents=True, exist_ok=True)
 
         queue_file = queue_dir / "ingestion_queue.jsonl"

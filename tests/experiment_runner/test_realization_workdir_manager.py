@@ -37,11 +37,11 @@ class TestRealizationWorkdirManager:
 
         workdir = manager.create_workdir(
             experiment_id="exp-123",
-            iteration=0,
+            ensemble_id="ens-abc",
             realization=5,
         )
 
-        expected_path = tmp_path / "exp-123" / "realization-5" / "iteration-0"
+        expected_path = tmp_path / "exp-123" / "ens-abc" / "realization-5"
         assert workdir == expected_path
         assert workdir.exists()
         assert workdir.is_dir()
@@ -53,16 +53,16 @@ class TestRealizationWorkdirManager:
         """Multiple iterations can coexist within the same realization."""
         manager = RealizationWorkdirManager(base_workdir=tmp_path)
 
-        workdir_iter0 = manager.create_workdir("exp-1", 0, 1)
-        workdir_iter1 = manager.create_workdir("exp-1", 1, 1)
-        workdir_iter2 = manager.create_workdir("exp-1", 2, 1)
+        workdir_iter0 = manager.create_workdir("exp-1", "ens-0", 1)
+        workdir_iter1 = manager.create_workdir("exp-1", "ens-1", 1)
+        workdir_iter2 = manager.create_workdir("exp-1", "ens-2", 1)
 
         assert workdir_iter0.exists()
         assert workdir_iter1.exists()
         assert workdir_iter2.exists()
-        assert workdir_iter0.name == "iteration-0"
-        assert workdir_iter1.name == "iteration-1"
-        assert workdir_iter2.name == "iteration-2"
+        assert workdir_iter0.parent.name == "ens-0"
+        assert workdir_iter1.parent.name == "ens-1"
+        assert workdir_iter2.parent.name == "ens-2"
 
     def test_create_workdir_handles_multiple_realizations_in_same_experiment(
         self,
@@ -71,16 +71,16 @@ class TestRealizationWorkdirManager:
         """Multiple realizations can coexist within the same experiment."""
         manager = RealizationWorkdirManager(base_workdir=tmp_path)
 
-        workdir_1 = manager.create_workdir("exp-multi", 0, 1)
-        workdir_2 = manager.create_workdir("exp-multi", 0, 2)
-        workdir_3 = manager.create_workdir("exp-multi", 0, 3)
+        workdir_1 = manager.create_workdir("exp-multi", "ens-0", 1)
+        workdir_2 = manager.create_workdir("exp-multi", "ens-0", 2)
+        workdir_3 = manager.create_workdir("exp-multi", "ens-0", 3)
 
         assert workdir_1.exists()
         assert workdir_2.exists()
         assert workdir_3.exists()
-        assert workdir_1.parent.name == "realization-1"
-        assert workdir_2.parent.name == "realization-2"
-        assert workdir_3.parent.name == "realization-3"
+        assert workdir_1.name == "realization-1"
+        assert workdir_2.name == "realization-2"
+        assert workdir_3.name == "realization-3"
 
     def test_get_workdir_returns_correct_path_without_creation(
         self,
@@ -89,9 +89,9 @@ class TestRealizationWorkdirManager:
         """get_workdir returns the expected path without creating directories."""
         manager = RealizationWorkdirManager(base_workdir=tmp_path)
 
-        workdir = manager.get_workdir("exp-test", 2, 7)
+        workdir = manager.get_workdir("exp-test", "ens-2", 7)
 
-        expected_path = tmp_path / "exp-test" / "realization-7" / "iteration-2"
+        expected_path = tmp_path / "exp-test" / "ens-2" / "realization-7"
         assert workdir == expected_path
         assert not workdir.exists()  # Should not create the directory
 
@@ -103,11 +103,11 @@ class TestRealizationWorkdirManager:
         manager = RealizationWorkdirManager(base_workdir=tmp_path, enable_cleanup=True)
 
         # Create workdir first
-        workdir = manager.create_workdir("exp-cleanup", 0, 1)
+        workdir = manager.create_workdir("exp-cleanup", "ens-0", 1)
         assert workdir.exists()
 
         # Cleanup should remove it
-        manager.cleanup_workdir("exp-cleanup", 0, 1)
+        manager.cleanup_workdir("exp-cleanup", "ens-0", 1)
         assert not workdir.exists()
 
     def test_cleanup_workdir_preserves_directory_when_cleanup_disabled(
@@ -118,11 +118,11 @@ class TestRealizationWorkdirManager:
         manager = RealizationWorkdirManager(base_workdir=tmp_path, enable_cleanup=False)
 
         # Create workdir first
-        workdir = manager.create_workdir("exp-preserve", 0, 1)
+        workdir = manager.create_workdir("exp-preserve", "ens-0", 1)
         assert workdir.exists()
 
         # Cleanup should NOT remove it
-        manager.cleanup_workdir("exp-preserve", 0, 1)
+        manager.cleanup_workdir("exp-preserve", "ens-0", 1)
         assert workdir.exists()
 
     def test_cleanup_workdir_handles_nonexistent_directory_gracefully(
@@ -133,17 +133,7 @@ class TestRealizationWorkdirManager:
         manager = RealizationWorkdirManager(base_workdir=tmp_path, enable_cleanup=True)
 
         # Should not raise exception
-        manager.cleanup_workdir("nonexistent-exp", 0, 1)
-
-    def test_create_workdir_rejects_negative_iteration_number(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """Creating workdir with negative iteration number raises ValueError."""
-        manager = RealizationWorkdirManager(base_workdir=tmp_path)
-
-        with pytest.raises(ValueError, match=r"Iteration number must be >= 0, got: -1"):
-            manager.create_workdir("exp-fail", -1, 0)
+        manager.cleanup_workdir("nonexistent-exp", "ens-0", 1)
 
     def test_create_workdir_rejects_negative_realization_number(
         self,
@@ -156,25 +146,25 @@ class TestRealizationWorkdirManager:
             ValueError,
             match=r"Realization number must be >= 0, got: -5",
         ):
-            manager.create_workdir("exp-fail", 0, -5)
+            manager.create_workdir("exp-fail", "ens-0", -5)
 
     def test_create_workdir_accepts_zero_values(self, tmp_path: Path) -> None:
-        """Zero values for iteration and realization are valid."""
+        """Zero values for realization are valid."""
         manager = RealizationWorkdirManager(base_workdir=tmp_path)
 
-        workdir = manager.create_workdir("exp-zero", 0, 0)
+        workdir = manager.create_workdir("exp-zero", "ens-0", 0)
 
         assert workdir.exists()
         assert "realization-0" in str(workdir)
-        assert "iteration-0" in str(workdir)
+        assert "ens-0" in str(workdir)
 
     @given(
-        iteration=st.integers(min_value=0, max_value=100),
+        ensemble_id=st.text(min_size=1, max_size=10, alphabet="abcdef0123456789"),
         realization=st.integers(min_value=0, max_value=1000),
     )
     def test_create_workdir_handles_various_valid_inputs(
         self,
-        iteration: int,
+        ensemble_id: str,
         realization: int,
     ) -> None:
         """Directory creation works correctly across wide range of valid inputs."""
@@ -184,25 +174,25 @@ class TestRealizationWorkdirManager:
             experiment_id = str(uuid.uuid4())
             manager = RealizationWorkdirManager(base_workdir=base_workdir)
 
-            workdir = manager.create_workdir(experiment_id, iteration, realization)
+            workdir = manager.create_workdir(experiment_id, ensemble_id, realization)
 
             assert workdir.exists()
             assert workdir.is_dir()
             assert experiment_id in str(workdir)
             assert f"realization-{realization}" in str(workdir)
-            assert f"iteration-{iteration}" in str(workdir)
+            assert ensemble_id in str(workdir)
 
     def test_create_workdir_overwrites_existing_directory(self, tmp_path: Path) -> None:
         """Creating workdir twice overwrites existing directory."""
         manager = RealizationWorkdirManager(base_workdir=tmp_path)
 
         # Create initial workdir and add a test file
-        workdir = manager.create_workdir("exp-overwrite", 0, 1)
+        workdir = manager.create_workdir("exp-overwrite", "ens-0", 1)
         test_file = workdir / "test.txt"
         test_file.write_text("original content")
 
         # Overwrite should recreate the directory
-        workdir_2 = manager.create_workdir("exp-overwrite", 0, 1)
+        workdir_2 = manager.create_workdir("exp-overwrite", "ens-0", 1)
 
         assert workdir == workdir_2  # Same path
         assert workdir.exists()
@@ -217,12 +207,12 @@ class TestRealizationWorkdirManager:
         manager = RealizationWorkdirManager(base_workdir=tmp_path, enable_cleanup=True)
 
         # Create multiple iterations in same realization
-        workdir_iter0 = manager.create_workdir("exp-partial", 0, 1)
-        workdir_iter1 = manager.create_workdir("exp-partial", 1, 1)
+        workdir_iter0 = manager.create_workdir("exp-partial", "ens-0", 1)
+        workdir_iter1 = manager.create_workdir("exp-partial", "ens-1", 1)
 
         # Cleanup only one iteration
-        manager.cleanup_workdir("exp-partial", 0, 1)
+        manager.cleanup_workdir("exp-partial", "ens-0", 1)
 
         assert not workdir_iter0.exists()
         assert workdir_iter1.exists()
-        assert (tmp_path / "exp-partial" / "realization-1").exists()  # Parent preserved
+        assert (tmp_path / "exp-partial" / "ens-1").exists()  # Parent preserved

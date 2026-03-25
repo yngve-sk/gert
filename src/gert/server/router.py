@@ -1,8 +1,8 @@
 """API router for GERT server."""
 
+import asyncio
 import uuid
 from collections import defaultdict
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -31,9 +31,6 @@ class RealizationStatus(BaseModel):
     realization_id: int
     iteration: int
     status: str
-    responses_emitted: int = 0
-    last_response_name: str | None = None
-    last_response_value: str | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -45,7 +42,9 @@ class ExperimentResponse(BaseModel):
 # In-memory storage for experiment configurations (Mocked storage)
 # In PR 2.1, this should move to a more persistent storage backend.
 _experiment_configs: dict[str, ExperimentConfig] = {}
+_executions_to_configs: dict[str, ExperimentConfig] = {}
 _experiment_statuses: dict[str, dict[int, RealizationStatus]] = defaultdict(dict)
+_consolidation_tasks: set[asyncio.Task[Any]] = set()
 
 
 @router.post(
@@ -114,7 +113,7 @@ async def start_experiment(
         queue_config=config.queue_config.custom_attributes,
         executor_type=config.queue_config.backend,
     )
-    workdir_manager = RealizationWorkdirManager(BASE_STORAGE_PATH / "workdirs")
+    workdir_manager = RealizationWorkdirManager(config.realization_workdirs_base)
 
     execution_id_ref = {"id": ""}
 
@@ -142,6 +141,7 @@ async def start_experiment(
     )
     new_id = orchestrator.start_experiment(config)
     execution_id_ref["id"] = new_id
+    _executions_to_configs[new_id] = config
 
     # Initialize statuses as PENDING
     # Determine unique realizations
@@ -159,7 +159,27 @@ async def start_experiment(
 
     orchestrator.run_iteration(iteration=0, parameters=config.parameter_matrix)
 
-    return {"status": "started", "experiment_id": new_id}
+    async def _consolidation_loop() -> None:
+        """Background task to periodically consolidate responses."""
+        worker = ConsolidationWorker(config.storage_base)
+        while True:
+            await asyncio.sleep(config.consolidation_interval)
+            worker.consolidate(new_id)
+
+            statuses = _experiment_statuses.get(new_id)
+            if statuses and all(
+                s.status in {"COMPLETED", "FAILED"} for s in statuses.values()
+            ):
+                # Do one final consolidation to ensure nothing is missed
+                worker.consolidate(new_id)
+                break
+
+    task = asyncio.create_task(_consolidation_loop())
+    _consolidation_tasks.add(task)
+    task.add_done_callback(_consolidation_tasks.discard)
+
+    ensemble_id = uuid.uuid5(uuid.UUID(new_id), "0").hex
+    return {"status": "started", "experiment_id": new_id, "ensemble_id": ensemble_id}
 
 
 @router.get(
@@ -175,83 +195,79 @@ async def get_experiment_status(
 
 
 # Storage Dependencies
-# In a real app, these would be configured via app state or a settings object.
-BASE_STORAGE_PATH = Path("./gert_storage")
+def get_experiment_config_dependency(
+    experiment_id: Annotated[str, FastApiPath(alias="id")],
+) -> ExperimentConfig:
+    """Dependency to retrieve an experiment configuration by ID.
+
+    Raises:
+        HTTPException: If the experiment is not found.
+    """
+    if experiment_id in _experiment_configs:
+        return _experiment_configs[experiment_id]
+    if experiment_id in _executions_to_configs:
+        return _executions_to_configs[experiment_id]
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Experiment '{experiment_id}' not found",
+    )
 
 
-def get_ingestion_receiver() -> IngestionReceiver:
+def get_ingestion_receiver(
+    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
+) -> IngestionReceiver:
     """Dependency provider for IngestionReceiver."""
-    return IngestionReceiver(BASE_STORAGE_PATH)
+    return IngestionReceiver(config.storage_base)
 
 
-def get_consolidation_worker() -> ConsolidationWorker:
+def get_consolidation_worker(
+    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
+) -> ConsolidationWorker:
     """Dependency provider for ConsolidationWorker."""
-    return ConsolidationWorker(BASE_STORAGE_PATH)
+    return ConsolidationWorker(config.storage_base)
 
 
-def get_query_api() -> StorageQueryAPI:
+def get_query_api(
+    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
+) -> StorageQueryAPI:
     """Dependency provider for StorageQueryAPI."""
-    return StorageQueryAPI(BASE_STORAGE_PATH)
+    return StorageQueryAPI(config.storage_base)
 
 
 @router.post(
-    "/storage/{id}/ingest",
+    "/storage/{id}/ensembles/{ensemble_id}/ingest",
     status_code=status.HTTP_202_ACCEPTED,
     summary="Ingest data",
     description="Pushes a simulated response or parameter payload into the queue.",
 )
 async def ingest_data(
     experiment_id: Annotated[str, FastApiPath(alias="id")],
+    ensemble_id: str,
     payload: IngestionPayload,
     receiver: Annotated[IngestionReceiver, Depends(get_ingestion_receiver)],
 ) -> dict[str, str]:
-    """Ingest a payload for a given experiment."""
-    receiver.receive(experiment_id, payload)
-
-    last_name = None
-    last_value = None
-    if hasattr(payload, "key") and hasattr(payload, "value"):
-        key = payload.key
-        if isinstance(key, dict):
-            last_name = ", ".join(f"{k}={v}" for k, v in key.items())
-        else:
-            last_name = str(key)
-
-        val = payload.value
-        last_value = str(val.path) if hasattr(val, "path") else str(val)
-
-    state = _experiment_statuses[experiment_id].get(payload.realization)
-    if state:
-        state.responses_emitted += 1
-        if last_name is not None:
-            state.last_response_name = last_name
-        if last_value is not None:
-            state.last_response_value = last_value
-
+    """Ingest a payload for a given experiment and ensemble."""
+    receiver.receive(experiment_id, ensemble_id, payload)
     return {"status": "accepted"}
 
 
 @router.get(
-    "/storage/{id}/responses",
+    "/storage/{id}/ensembles/{ensemble_id}/responses",
     summary="Retrieve responses",
-    description="Returns all consolidated responses for the experiment.",
+    description="Returns all consolidated responses for the experiment and ensemble.",
 )
 async def get_responses(
     experiment_id: Annotated[str, FastApiPath(alias="id")],
+    ensemble_id: str,
     query_api: Annotated[StorageQueryAPI, Depends(get_query_api)],
-    worker: Annotated[ConsolidationWorker, Depends(get_consolidation_worker)],
 ) -> list[dict[str, Any]]:
-    """Retrieve consolidated responses, triggering a consolidation first.
+    """Retrieve consolidated responses.
 
     Raises:
-        HTTPException: If the experiment is not found.
+        HTTPException: If the experiment or ensemble is not found.
     """
-    # For now, we trigger consolidation on every read to ensure fresh data.
-    # In a production system, this would be a background task.
-    worker.consolidate(experiment_id)
-
     try:
-        df = query_api.get_responses(experiment_id)
+        df = query_api.get_responses(experiment_id, ensemble_id)
         return df.to_dicts()
     except FileNotFoundError as e:
         raise HTTPException(

@@ -4,6 +4,7 @@
 import json
 import time
 import urllib.request
+import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.error import URLError
@@ -120,13 +121,22 @@ class GertMonitorApp(App[None]):
         api_url: str,
         experiment_id: str,
         expected_count: int | None = None,
+        ensemble_id: str | None = None,
     ) -> None:
         super().__init__()
         self.api_url = api_url
         self.experiment_id = experiment_id
         self.expected_count = expected_count
         self.status_url = f"{api_url}/experiments/{experiment_id}/status"
+
+        if ensemble_id is None:
+            ensemble_id = uuid.uuid5(uuid.UUID(experiment_id), "0").hex
+
+        self.responses_url = (
+            f"{api_url}/storage/{experiment_id}/ensembles/{ensemble_id}/responses"
+        )
         self._statuses: dict[int, dict[str, Any]] = {}
+        self._responses: dict[int, list[dict[str, Any]]] = defaultdict(list)
         self._iteration_nodes: dict[int, TreeNode[int]] = {}
         self._realization_nodes: dict[int, TreeNode[int]] = {}
         self._iteration_progress: dict[int, ProgressBar] = {}
@@ -168,6 +178,7 @@ class GertMonitorApp(App[None]):
     def poll_api(self) -> None:
         """Poll the API for status updates in a background thread."""
         while not self._exiting:
+            should_exit = False
             try:
                 req = urllib.request.Request(self.status_url)  # noqa: S310
                 with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
@@ -183,14 +194,28 @@ class GertMonitorApp(App[None]):
                                 for s in self._statuses.values()
                             )
                         ):
-                            time.sleep(1)
-                            self._exiting = True
-                            self.call_from_thread(self.exit)
-                            break
+                            should_exit = True
             except URLError:
                 pass
             except Exception:  # noqa: S110
                 pass
+
+            try:
+                req2 = urllib.request.Request(self.responses_url)  # noqa: S310
+                with urllib.request.urlopen(req2, timeout=5) as response2:  # noqa: S310
+                    if response2.getcode() == 200:
+                        data2 = json.loads(response2.read().decode("utf-8"))
+                        self.call_from_thread(self.process_responses, data2)
+            except URLError:
+                pass
+            except Exception:  # noqa: S110
+                pass
+
+            if should_exit:
+                time.sleep(1)
+                self._exiting = True
+                self.call_from_thread(self.exit)
+                break
 
             time.sleep(0.5)
 
@@ -234,17 +259,39 @@ class GertMonitorApp(App[None]):
 
         progress_view = self.query_one(ProgressView)
         for it, counts in iter_counts.items():
+            pct = 0
+            if counts["total"] > 0:
+                pct = int(100 * counts["done"] / counts["total"])
+
+            bar_len = 10
+            filled = int(bar_len * pct / 100)
+            bar = "█" * filled + "░" * (bar_len - filled)
+
+            if it in self._iteration_nodes:
+                self._iteration_nodes[it].set_label(f"Iteration {it} [{bar}] {pct}%")
+
             if it not in self._iteration_progress:
-                row = Horizontal(classes="iteration-row")
-                row.mount(Label(f"Iteration {it}", classes="iteration-label"))
                 pb = ProgressBar(total=counts["total"], show_eta=False)
                 self._iteration_progress[it] = pb
-                row.mount(pb)
+                row = Horizontal(
+                    Label(f"Iteration {it}", classes="iteration-label"),
+                    pb,
+                    classes="iteration-row",
+                )
                 progress_view.mount(row)
             else:
                 pb = self._iteration_progress[it]
                 pb.total = counts["total"]
                 pb.progress = counts["done"]
+
+    def process_responses(self, data: list[dict[str, Any]]) -> None:
+        """Process response data and update the cached responses on the main thread."""
+        new_responses = defaultdict(list)
+        for item in data:
+            r_id = item.get("realization")
+            if r_id is not None:
+                new_responses[r_id].append(item)
+        self._responses = dict(new_responses)
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[int]) -> None:
         """Handle tree node highlight to show response data."""
@@ -272,20 +319,33 @@ class GertMonitorApp(App[None]):
 
         state = self._statuses.get(r_id)
         if state:
-            viewer = self.query_one("#response-view", ResponseViewer)
-            last_name = state.get("last_response_name")
-            last_value = state.get("last_response_value")
+            responses = self._responses.get(r_id, [])
+            last_value = None
+            key_fields = {}
+            if responses:
+                last_resp = responses[-1]
+                known_fields = {"realization", "source_step", "value", "type"}
+                key_fields = {
+                    k: v
+                    for k, v in last_resp.items()
+                    if k not in known_fields and v is not None
+                }
+                last_value = str(last_resp.get("value"))
 
             content = [
                 f"Realization: {r_id}",
                 f"Iteration: {state['iteration']}",
                 f"Status: {state['status']}",
-                f"Responses Emitted: {state.get('responses_emitted', 0)}",
+                f"Responses Emitted: {len(responses)}",
                 "",
                 "Last Response:",
-                f"  Name:  {last_name if last_name is not None else '-'}",
-                f"  Value: {last_value if last_value is not None else '-'}",
             ]
+            if responses:
+                for k, v in key_fields.items():
+                    content.append(f"  {k}: {v}")
+                content.append(f"  Value: {last_value}")
+            else:
+                content.append("  (None)")
 
             viewer.update_response("\n".join(content))
 
@@ -294,7 +354,8 @@ def start_monitor(
     api_url: str,
     experiment_id: str,
     expected_count: int | None = None,
+    ensemble_id: str | None = None,
 ) -> None:
     """Entry point for the monitor CLI command."""
-    app = GertMonitorApp(api_url, experiment_id, expected_count)
+    app = GertMonitorApp(api_url, experiment_id, expected_count, ensemble_id)
     app.run()
