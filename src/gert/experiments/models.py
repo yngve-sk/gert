@@ -176,9 +176,9 @@ class ExperimentConfig(BaseModel):
     name: str
     base_working_directory: Path
 
-    storage_base: Path = Field(default_factory=lambda: Path("./gert_storage"))
+    storage_base: Path = Field(default_factory=lambda: Path("./permanent_storage"))
     realization_workdirs_base: Path = Field(
-        default_factory=lambda: Path("./gert_storage/workdirs"),
+        default_factory=lambda: Path("./workdirs"),
     )
     consolidation_interval: float = Field(
         default=5.0,

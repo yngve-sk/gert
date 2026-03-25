@@ -19,14 +19,14 @@ GERT defines two primary, configurable paths for managing experiment I/O:
 *   **`realization_workdirs_base` (Base for Realization Workdirs):**
     *   **Purpose:** The top-level directory under which GERT creates temporary, isolated "realization workdirs" for executing each forward model.
     *   **Structure:** Workdirs for a specific run are located at:
-        `<realization_workdirs_base>/<experiment_id>/<execution_id>/`
-    *   **Behavior:** This directory contains sandboxed environments for each model run and is considered ephemeral. GERT may clean up its contents after an execution completes successfully.
+        `<realization_workdirs_base>/<experiment_id>/<ensemble_id>/`
+    *   **Behavior:** This directory contains sandboxed environments for each model run and is considered ephemeral. GERT may clean up its contents after an execution completes successfully. Defaults to `./workdirs`.
 
 *   **`storage_base` (Base for Persistent Storage):**
     *   **Purpose:** The top-level directory for storing all persistent artifacts generated during an experiment, such as consolidated responses, logs, and other critical outputs.
     *   **Structure:** Persistent artifacts for a specific run are located at:
-        `<storage_base>/<experiment_id>/<execution_id>/`
-    *   **Behavior:** This directory contains the final, valuable results of the experiment and must be preserved. Data within this path is the source of truth for resuming a failed execution.
+        `<storage_base>/<experiment_id>/<ensemble_id>/`
+    *   **Behavior:** This directory contains the final, valuable results of the experiment and must be preserved. Data within this path is the source of truth for resuming a failed execution. Defaults to `./permanent_storage`.
 
 This explicit and nested approach ensures that the I/O for every execution is entirely predictable and isolated, deriving its configuration from a single, immutable source file.
 
@@ -100,5 +100,5 @@ GERT operates as a distributed system composed of specific, decoupled services:
 
 ## 13. Misc
 * Iterations and realization nrs may never be negative, and these cases should not be tested, but rather guarded against.
-* experiments / ensembles are identified by uuids
+* experiments / ensembles are identified by name/counter suffixed by uuids (e.g., `my_exp-550e8400...` and `run_0-550e8400...`)
 * Names of things, experiments, ensembles, parameters, observations, responses should be sensible and not contain obscure or bizzarre characters, and it is OK to enforce this in GERT.

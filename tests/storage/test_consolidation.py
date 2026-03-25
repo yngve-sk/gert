@@ -9,7 +9,7 @@ from gert.storage.ingestion import IngestionReceiver
 
 def test_consolidation_worker_creates_parquet(tmp_path: Path) -> None:
     """Test that ConsolidationWorker drains .jsonl and creates .parquet."""
-    base_path = tmp_path / "gert_storage"
+    base_path = tmp_path / "permanent_storage"
     receiver = IngestionReceiver(base_path)
     worker = ConsolidationWorker(base_path)
     experiment_id = "test-exp"
@@ -50,7 +50,7 @@ def test_consolidation_worker_creates_parquet(tmp_path: Path) -> None:
 
 def test_consolidation_worker_appends_to_parquet(tmp_path: Path) -> None:
     """Test that ConsolidationWorker appends new data to existing .parquet."""
-    base_path = tmp_path / "gert_storage"
+    base_path = tmp_path / "permanent_storage"
     receiver = IngestionReceiver(base_path)
     worker = ConsolidationWorker(base_path)
     experiment_id = "test-exp"
@@ -103,7 +103,7 @@ def test_consolidation_worker_appends_to_parquet(tmp_path: Path) -> None:
 
 def test_consolidate_nonexistent_experiment(tmp_path: Path) -> None:
     """Test consolidation handles non-existent experiment directory gracefully."""
-    base_path = tmp_path / "gert_storage"
+    base_path = tmp_path / "permanent_storage"
     worker = ConsolidationWorker(base_path)
     # Should just return early without error
     worker.consolidate("nonexistent-exp")
@@ -111,7 +111,7 @@ def test_consolidate_nonexistent_experiment(tmp_path: Path) -> None:
 
 def test_consolidate_ignores_files(tmp_path: Path) -> None:
     """Test consolidation ignores files that are not directories in experiment dir."""
-    base_path = tmp_path / "gert_storage"
+    base_path = tmp_path / "permanent_storage"
     worker = ConsolidationWorker(base_path)
     experiment_id = "test-exp-files"
 
@@ -128,7 +128,7 @@ def test_consolidate_ignores_files(tmp_path: Path) -> None:
 
 def test_consolidate_missing_queue_file(tmp_path: Path) -> None:
     """Test consolidation skips ensemble directories with missing queue files."""
-    base_path = tmp_path / "gert_storage"
+    base_path = tmp_path / "permanent_storage"
     worker = ConsolidationWorker(base_path)
     experiment_id = "test-exp-no-queue"
     ensemble_id = "ens-no-queue"

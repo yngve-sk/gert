@@ -56,16 +56,20 @@ class ExperimentOrchestrator:
             The experiment ID for tracking execution status.
         """
         self._config = config
-        self._experiment_id = uuid.uuid4().hex
+        exp_uuid = uuid.uuid4().hex
+        self._experiment_id = f"{config.name}-{exp_uuid}"
         self._current_parameters = config.parameter_matrix
         return self._experiment_id
 
-    def run_iteration(self, iteration: int, parameters: ParameterMatrix) -> None:
+    def run_iteration(self, iteration: int, parameters: ParameterMatrix) -> str:
         """Execute forward model for an iteration.
 
         Args:
             iteration: The iteration number.
             parameters: Parameter matrix to use.
+
+        Returns:
+            The ensemble ID for this iteration.
 
         Raises:
             RuntimeError: If the experiment has not been started.
@@ -81,6 +85,10 @@ class ExperimentOrchestrator:
 
         self._current_parameters = parameters
 
+        # Generate a stable ensemble_id for this iteration
+        ensemble_uuid = uuid.uuid4().hex
+        ensemble_id = f"run_{iteration}-{ensemble_uuid}"
+
         # Determine unique realizations from the parameter matrix
         realizations: set[int] = set()
         if parameters.values:
@@ -88,14 +96,22 @@ class ExperimentOrchestrator:
                 realizations.update(payload.keys())
 
         for realization_id in realizations:
-            self.run_realization(realization_id, iteration)
+            self.run_realization(realization_id, iteration, ensemble_id)
 
-    def run_realization(self, realization_id: int, iteration: int) -> None:
+        return ensemble_id
+
+    def run_realization(
+        self,
+        realization_id: int,
+        iteration: int,
+        ensemble_id: str,
+    ) -> None:
         """Execute forward model for a specific realization.
 
         Args:
             realization_id: The realization ID.
             iteration: The iteration number.
+            ensemble_id: The unique ID for this ensemble/run.
 
         Raises:
             RuntimeError: If the experiment has not been started.
@@ -112,8 +128,6 @@ class ExperimentOrchestrator:
         if iteration < 0:
             msg = f"Iteration number must be >= 0, got: {iteration}"
             raise ValueError(msg)
-
-        ensemble_id = uuid.uuid5(uuid.UUID(self._experiment_id), str(iteration)).hex
 
         workdir = self._workdir_manager.create_workdir(
             experiment_id=self._experiment_id,

@@ -15,7 +15,7 @@ from gert.storage.consolidation import ConsolidationWorker
 @pytest.fixture
 def clean_storage() -> Generator[None, None, None]:
     """Fixture to clean up the storage directory before and after tests."""
-    storage_path = Path("./gert_storage")
+    storage_path = Path("./permanent_storage")
     if storage_path.exists():
         shutil.rmtree(storage_path)
     yield
@@ -60,7 +60,7 @@ def test_storage_integration_blast(clean_storage: None) -> None:
         )
         assert response.status_code == 202
 
-    worker = ConsolidationWorker(Path("./gert_storage"))
+    worker = ConsolidationWorker(Path("./permanent_storage"))
     worker.consolidate(experiment_id)
 
     # 2. Retrieve responses
@@ -121,7 +121,7 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
     for response in responses:
         assert response.status_code == 202
 
-    worker = ConsolidationWorker(Path("./gert_storage"))
+    worker = ConsolidationWorker(Path("./permanent_storage"))
     worker.consolidate(experiment_id)
 
     # Verify via regular TestClient

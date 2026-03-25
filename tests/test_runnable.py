@@ -15,11 +15,11 @@ from gert.storage.consolidation import ConsolidationWorker
 @pytest.fixture
 def clean_storage() -> Generator[None, None, None]:
     """Fixture to clean up the storage directory."""
-    for path in [Path("./gert_storage"), Path("./workdirs")]:
+    for path in [Path("./permanent_storage"), Path("./workdirs")]:
         if path.exists():
             shutil.rmtree(path)
     yield
-    for path in [Path("./gert_storage"), Path("./workdirs")]:
+    for path in [Path("./permanent_storage"), Path("./workdirs")]:
         if path.exists():
             shutil.rmtree(path)
 
@@ -86,9 +86,7 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
 
     # 3. Wait for jobs to finish (local psij is usually fast)
     # We'll check for the workdir creation
-    workdir_base = (
-        Path("./gert_storage/workdirs").resolve() / execution_id / ensemble_id
-    )
+    workdir_base = Path("./workdirs").resolve() / execution_id / ensemble_id
     assert workdir_base.exists()
     # Check realization 0 and 1 workdirs
     for i in range(2):
@@ -110,7 +108,7 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
                 json=payload,
             )
 
-    worker = ConsolidationWorker(Path("./gert_storage"))
+    worker = ConsolidationWorker(Path("./permanent_storage"))
     worker.consolidate(execution_id)
 
     # 4. Verify consolidated data
