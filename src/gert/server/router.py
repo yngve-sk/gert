@@ -162,32 +162,48 @@ async def start_experiment(
             iteration=0,
             status="PENDING",
         )
-
+    iteration = 0
     orchestrator.run_iteration(
-        iteration=0,
+        iteration=iteration,
         parameters=config.parameter_matrix,
     )
 
-    async def _consolidation_loop() -> None:
-        """Background task to periodically consolidate responses."""
-        worker = ConsolidationWorker(config.storage_base)
-        while True:
-            await asyncio.sleep(config.consolidation_interval)
-            worker.consolidate(config.name, execution_id)
+    worker = ConsolidationWorker(config.storage_base)
+    queue_path = (
+        config.storage_base
+        / config.name
+        / execution_id
+        / f"iter-{iteration}"
+        / "ingestion_queue.jsonl"
+    )
 
+    # Start the watching background task
+    watch_task = asyncio.create_task(
+        worker.start_watching(queue_path, config.consolidation_interval),
+    )
+    _consolidation_tasks.add(watch_task)
+    watch_task.add_done_callback(_consolidation_tasks.discard)
+
+    async def _completion_monitor() -> None:
+        """Monitor for completion and shutdown the worker properly."""
+        while True:
+            await asyncio.sleep(1.0)
             statuses = _experiment_statuses.get(execution_id)
             if statuses and all(
                 s.status in {"COMPLETED", "FAILED"} for s in statuses.values()
             ):
-                # Do one final consolidation to ensure nothing is missed
+                # Wait a short time to allow any in-flight ingestion requests to arrive
+                await asyncio.sleep(1.0)
+                # Flush and cancel watching
+                watch_task.cancel()
                 worker.consolidate(config.name, execution_id)
                 break
 
-    task = asyncio.create_task(_consolidation_loop())
-    _consolidation_tasks.add(task)
-    task.add_done_callback(_consolidation_tasks.discard)
+    monitor_task = asyncio.create_task(_completion_monitor())
+    _consolidation_tasks.add(monitor_task)
+    monitor_task.add_done_callback(_consolidation_tasks.discard)
 
-    return {"status": "started", "execution_id": execution_id, "iteration": 0}
+    return {"status": "started", "execution_id": execution_id, "iteration": iteration}
 
 
 @router.get(
