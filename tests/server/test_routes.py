@@ -8,6 +8,7 @@ def test_create_and_get_experiment() -> None:
     client = TestClient(gert_server_app)
     config_data = {
         "name": "test-experiment",
+        "base_working_directory": ".",
         "forward_model_steps": [
             {
                 "name": "step1",

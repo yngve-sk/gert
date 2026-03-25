@@ -1,5 +1,6 @@
 import asyncio
 import shutil
+import uuid
 from collections.abc import Generator
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gert.server.gert_server import gert_server_app
+from gert.storage.consolidation import ConsolidationWorker
 
 
 @pytest.fixture
@@ -24,7 +26,21 @@ def clean_storage() -> Generator[None, None, None]:
 def test_storage_integration_blast(clean_storage: None) -> None:
     """Blast 100 concurrent payloads and verify consolidation."""
     client = TestClient(gert_server_app)
-    experiment_id = "blast-test"
+
+    # Register an experiment
+    config_data = {
+        "name": "blast-test",
+        "base_working_directory": ".",
+        "forward_model_steps": [{"executable": "echo", "name": "e"}],
+        "queue_config": {"backend": "local", "custom_attributes": {}},
+        "parameter_matrix": {"metadata": {}, "values": {}, "datasets": []},
+        "observations": [],
+    }
+    response = client.post("/experiments", json=config_data)
+    assert response.status_code == 201
+    experiment_id = response.json()["id"]
+
+    ensemble_id = uuid.uuid4().hex
 
     # 1. Ingest 100 payloads
     payloads = [
@@ -39,13 +55,16 @@ def test_storage_integration_blast(clean_storage: None) -> None:
 
     for payload in payloads:
         response = client.post(
-            f"/storage/{experiment_id}/ingest",
+            f"/storage/{experiment_id}/ensembles/{ensemble_id}/ingest",
             json=payload,
         )
         assert response.status_code == 202
 
-    # 2. Retrieve responses (this triggers consolidation in the route)
-    response = client.get(f"/storage/{experiment_id}/responses")
+    worker = ConsolidationWorker(Path("./gert_storage"))
+    worker.consolidate(experiment_id)
+
+    # 2. Retrieve responses
+    response = client.get(f"/storage/{experiment_id}/ensembles/{ensemble_id}/responses")
     assert response.status_code == 200
 
     data = response.json()
@@ -63,7 +82,20 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
     """Blast 100 payloads concurrently using httpx.AsyncClient."""
     # TestClient doesn't support true concurrency in the same way,
     # but we can use httpx.AsyncClient with the app.
-    experiment_id = "concurrent-blast-test"
+    client = TestClient(gert_server_app)
+    config_data = {
+        "name": "concurrent-blast-test",
+        "base_working_directory": ".",
+        "forward_model_steps": [{"executable": "echo", "name": "e"}],
+        "queue_config": {"backend": "local", "custom_attributes": {}},
+        "parameter_matrix": {"metadata": {}, "values": {}, "datasets": []},
+        "observations": [],
+    }
+    response = client.post("/experiments", json=config_data)
+    assert response.status_code == 201
+    experiment_id = response.json()["id"]
+
+    ensemble_id = uuid.uuid4().hex
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=gert_server_app),
@@ -77,16 +109,24 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
                 "key": {"response": "FOPR"},
                 "value": float(100 + i),
             }
-            tasks.append(ac.post(f"/storage/{experiment_id}/ingest", json=payload))
+            tasks.append(
+                ac.post(
+                    f"/storage/{experiment_id}/ensembles/{ensemble_id}/ingest",
+                    json=payload,
+                ),
+            )
 
         responses = await asyncio.gather(*tasks)
 
     for response in responses:
         assert response.status_code == 202
 
+    worker = ConsolidationWorker(Path("./gert_storage"))
+    worker.consolidate(experiment_id)
+
     # Verify via regular TestClient
     client = TestClient(gert_server_app)
-    response = client.get(f"/storage/{experiment_id}/responses")
+    response = client.get(f"/storage/{experiment_id}/ensembles/{ensemble_id}/responses")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 100

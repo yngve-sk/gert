@@ -24,10 +24,10 @@ def main() -> None:
         help="The realization number",
     )
     parser.add_argument(
-        "--iteration",
+        "--ensemble-id",
         required=True,
-        type=int,
-        help="The iteration number",
+        type=str,
+        help="The ensemble ID",
     )
     parser.add_argument(
         "--api-url",
@@ -45,7 +45,10 @@ def main() -> None:
 
     elapsed_time = 0.0
     step = 0
-    ingest_url = f"{args.api_url}/storage/{args.experiment_id}/ingest"
+    ingest_url = (
+        f"{args.api_url}/storage/{args.experiment_id}"
+        f"/ensembles/{args.ensemble_id}/ingest"
+    )
 
     while elapsed_time < total_time:
         # Sleep for ~1 second with some jitter

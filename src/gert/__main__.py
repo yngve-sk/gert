@@ -41,6 +41,8 @@ def _load_config(config_path: Path) -> dict[str, Any]:
         sys.exit(1)
 
     config_dir = config_path.parent.resolve()
+    config_data["base_working_directory"] = str(config_dir)
+
     for step in config_data.get("forward_model_steps", []):
         if "executable" in step:
             exec_path = config_dir / step["executable"]
@@ -97,13 +99,16 @@ def _ensure_server(
 def _poll_for_completion(
     client: httpx.Client,
     execution_id: str,
+    ensemble_id: str,
     expected_count: int,
 ) -> None:
     """Poll the API until all realizations are completed."""
     print(f"\nWaiting for {expected_count} realizations to complete...")
     while True:
         try:
-            resp = client.get(f"/storage/{execution_id}/responses")
+            resp = client.get(
+                f"/storage/{execution_id}/ensembles/{ensemble_id}/responses",
+            )
             resp.raise_for_status()
             responses = resp.json()
             if len(responses) >= expected_count:
@@ -145,19 +150,27 @@ def run_experiment(
             # 2. Start the execution
             response = client.post(f"/experiments/{config_id}/start")
             response.raise_for_status()
-            execution_id = response.json()["experiment_id"]
-            print(f"✅ Execution started (Execution ID: {execution_id})")
+            res_json = response.json()
+            execution_id = res_json["experiment_id"]
+            ensemble_id = res_json["ensemble_id"]
+            print(
+                f"✅ Execution started (Execution ID: {execution_id}, "
+                f"Ensemble ID: {ensemble_id})",
+            )
 
             if monitor:
                 expected_count = _get_expected_realizations(config_data)
-                start_monitor(api_url, execution_id, expected_count)
+                start_monitor(api_url, execution_id, expected_count, ensemble_id)
             elif server_process is not None or wait_for_completion:
                 expected_count = _get_expected_realizations(config_data)
-                _poll_for_completion(client, execution_id, expected_count)
+                _poll_for_completion(client, execution_id, ensemble_id, expected_count)
             else:
                 print("\nExperiment is running in the background.")
                 print("You can query the consolidated responses using:")
-                print(f"  curl {api_url}/storage/{execution_id}/responses")
+                print(
+                    f"  curl {api_url}/storage/{execution_id}"
+                    f"/ensembles/{ensemble_id}/responses",
+                )
 
         except httpx.ConnectError:
             print(

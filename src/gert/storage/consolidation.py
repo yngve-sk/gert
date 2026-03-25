@@ -20,12 +20,24 @@ class ConsolidationWorker:
         self._base_storage_path = base_storage_path
 
     def consolidate(self, experiment_id: str) -> None:
-        """Drain the .jsonl queue and upsert data into the .parquet response file.
+        """Drain the .jsonl queue and upsert data into the .parquet response files.
+
+        Processes all ensemble directories within the experiment.
 
         Args:
             experiment_id: The unique ID of the experiment to consolidate.
         """
-        queue_dir = self._base_storage_path / experiment_id
+        experiment_dir = self._base_storage_path / experiment_id
+        if not experiment_dir.exists():
+            return
+
+        for queue_dir in experiment_dir.iterdir():
+            if not queue_dir.is_dir():
+                continue
+
+            self._consolidate_ensemble(queue_dir)
+
+    def _consolidate_ensemble(self, queue_dir: Path) -> None:
         queue_file = queue_dir / "ingestion_queue.jsonl"
         parquet_file = queue_dir / "responses.parquet"
 
@@ -40,11 +52,11 @@ class ConsolidationWorker:
         new_data_df = pl.read_ndjson(processing_file)
 
         # Flatten the 'key' dictionary if it exists
-        if "key" in new_data_df.columns:
-            # Polars' read_ndjson might read 'key' as a struct
-            # We want to flatten it or keep it as is depending on storage strategy.
-            # For now, let's keep it simple and ensure we have a clean schema.
-            pass
+        if "key" in new_data_df.columns and isinstance(
+            new_data_df.schema["key"],
+            pl.Struct,
+        ):
+            new_data_df = new_data_df.unnest("key")
 
         # Load existing data if it exists
         if parquet_file.exists():

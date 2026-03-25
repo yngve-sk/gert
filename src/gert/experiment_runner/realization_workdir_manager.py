@@ -25,33 +25,30 @@ class RealizationWorkdirManager:
     def create_workdir(
         self,
         experiment_id: str,
-        iteration: int,
+        ensemble_id: str,
         realization: int,
     ) -> Path:
         """Create a scratch directory for a realization.
 
         Creates a temporary directory structure like:
-        {base_workdir}/{experiment_id}/iteration-{iteration}/realization-{realization}/
+        {base_workdir}/{experiment_id}/{ensemble_id}/realization-{realization}/
 
         Args:
             experiment_id: Unique experiment identifier.
-            iteration: The iteration number (0-based, must be >= 0).
+            ensemble_id: Unique ensemble identifier.
             realization: The realization number (0-based, must be >= 0).
 
         Returns:
             Path to the created workdir directory.
 
         Raises:
-            ValueError: If iteration or realization numbers are negative.
+            ValueError: If realization numbers are negative.
         """
-        if iteration < 0:
-            msg = f"Iteration number must be >= 0, got: {iteration}"
-            raise ValueError(msg)
         if realization < 0:
             msg = f"Realization number must be >= 0, got: {realization}"
             raise ValueError(msg)
 
-        workdir = self._build_workdir_path(experiment_id, iteration, realization)
+        workdir = self._build_workdir_path(experiment_id, ensemble_id, realization)
 
         # Remove existing directory if it exists to ensure clean state
         if workdir.exists():
@@ -65,7 +62,7 @@ class RealizationWorkdirManager:
     def cleanup_workdir(
         self,
         experiment_id: str,
-        iteration: int,
+        ensemble_id: str,
         realization: int,
     ) -> None:
         """Clean up a scratch directory after successful completion.
@@ -74,13 +71,13 @@ class RealizationWorkdirManager:
 
         Args:
             experiment_id: Unique experiment identifier.
-            iteration: The iteration number (0-based).
+            ensemble_id: Unique ensemble identifier.
             realization: The realization number (0-based).
         """
         if not self._enable_cleanup:
             return
 
-        workdir = self._build_workdir_path(experiment_id, iteration, realization)
+        workdir = self._build_workdir_path(experiment_id, ensemble_id, realization)
 
         if workdir.exists():
             shutil.rmtree(workdir)
@@ -88,32 +85,32 @@ class RealizationWorkdirManager:
     def get_workdir(
         self,
         experiment_id: str,
-        iteration: int,
+        ensemble_id: str,
         realization: int,
     ) -> Path:
         """Get the workdir path for a specific realization.
 
         Args:
             experiment_id: Unique experiment identifier.
-            iteration: The iteration number (0-based).
+            ensemble_id: Unique ensemble identifier.
             realization: The realization number (0-based).
 
         Returns:
             Path to the workdir directory (may not exist).
         """
-        return self._build_workdir_path(experiment_id, iteration, realization)
+        return self._build_workdir_path(experiment_id, ensemble_id, realization)
 
     def _build_workdir_path(
         self,
         experiment_id: str,
-        iteration: int,
+        ensemble_id: str,
         realization: int,
     ) -> Path:
         """Build the standardized workdir path.
 
         Args:
             experiment_id: Unique experiment identifier.
-            iteration: The iteration number.
+            ensemble_id: Unique ensemble identifier.
             realization: The realization number.
 
         Returns:
@@ -122,6 +119,6 @@ class RealizationWorkdirManager:
         return (
             self._base_workdir
             / experiment_id
+            / str(ensemble_id)
             / f"realization-{realization}"
-            / f"iteration-{iteration}"
         )

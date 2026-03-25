@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -75,6 +76,7 @@ class TestExperimentOrchestrator:
         """start_experiment correctly initializes the orchestrator state."""
         config = ExperimentConfig(
             name="test_experiment",
+            base_working_directory=Path(),
             forward_model_steps=[],
             queue_config=QueueConfig(backend="local"),
             parameter_matrix=ParameterMatrix(),
@@ -111,6 +113,7 @@ class TestExperimentOrchestrator:
         """run_iteration raises ValueError for negative iterations."""
         config = ExperimentConfig(
             name="test_experiment",
+            base_working_directory=Path(),
             forward_model_steps=[],
             queue_config=QueueConfig(backend="local"),
             parameter_matrix=ParameterMatrix(),
@@ -127,6 +130,7 @@ class TestExperimentOrchestrator:
         """run_realization raises ValueError for negative realization IDs."""
         config = ExperimentConfig(
             name="test_experiment",
+            base_working_directory=Path(),
             forward_model_steps=[],
             queue_config=QueueConfig(backend="local"),
             parameter_matrix=ParameterMatrix(),
@@ -143,6 +147,7 @@ class TestExperimentOrchestrator:
         """run_realization raises ValueError for negative iterations."""
         config = ExperimentConfig(
             name="test_experiment",
+            base_working_directory=Path(),
             forward_model_steps=[],
             queue_config=QueueConfig(backend="local"),
             parameter_matrix=ParameterMatrix(),
@@ -161,6 +166,7 @@ class TestExperimentOrchestrator:
 
         config = ExperimentConfig(
             name="test_experiment",
+            base_working_directory=Path(),
             forward_model_steps=[
                 ExecutableForwardModelStep(
                     name="step1",
@@ -204,6 +210,7 @@ class TestExperimentOrchestrator:
 
         config = ExperimentConfig(
             name="test_experiment",
+            base_working_directory=Path(),
             forward_model_steps=[
                 ExecutableForwardModelStep(
                     name="step1",
@@ -219,8 +226,10 @@ class TestExperimentOrchestrator:
 
         orchestrator.run_realization(realization_id=42, iteration=3)
 
+        ensemble_id = uuid.uuid5(uuid.UUID(exp_id), "3").hex
+
         # Verify workdir creation
-        expected_workdir = tmp_workdir / exp_id / "realization-42" / "iteration-3"
+        expected_workdir = tmp_workdir / exp_id / ensemble_id / "realization-42"
         assert expected_workdir.exists()
         assert expected_workdir.is_dir()
 
@@ -238,6 +247,7 @@ class TestExperimentOrchestrator:
 
         config = ExperimentConfig(
             name="test_experiment",
+            base_working_directory=Path(),
             forward_model_steps=[
                 ExecutableForwardModelStep(
                     name="step1",

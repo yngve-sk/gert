@@ -113,9 +113,11 @@ class ExperimentOrchestrator:
             msg = f"Iteration number must be >= 0, got: {iteration}"
             raise ValueError(msg)
 
+        ensemble_id = uuid.uuid5(uuid.UUID(self._experiment_id), str(iteration)).hex
+
         workdir = self._workdir_manager.create_workdir(
             experiment_id=self._experiment_id,
-            iteration=iteration,
+            ensemble_id=ensemble_id,
             realization=realization_id,
         )
 
@@ -128,6 +130,7 @@ class ExperimentOrchestrator:
                     replaced_arg = (
                         arg.replace("{experiment_id}", self._experiment_id)
                         .replace("{iteration}", str(iteration))  # noqa: RUF027
+                        .replace("{ensemble_id}", ensemble_id)
                         .replace("{realization}", str(realization_id))
                     )
                     cmd_parts.append(replaced_arg)
