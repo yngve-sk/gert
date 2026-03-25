@@ -9,7 +9,7 @@ from gert.storage.ingestion import IngestionReceiver
 
 def test_ingestion_receiver_appends_to_jsonl(tmp_path: Path) -> None:
     """Test that IngestionReceiver correctly appends payloads to a .jsonl file."""
-    base_path = tmp_path / "gert_storage"
+    base_path = tmp_path / "permanent_storage"
     receiver = IngestionReceiver(base_path)
     experiment_id = "test-exp"
 
@@ -43,7 +43,7 @@ def test_ingestion_receiver_appends_to_jsonl(tmp_path: Path) -> None:
 
 def test_ingestion_receiver_raises_on_invalid_payload(tmp_path: Path) -> None:
     """Test that IngestionReceiver raises TypeError on non-Pydantic payload."""
-    base_path = tmp_path / "gert_storage"
+    base_path = tmp_path / "permanent_storage"
     receiver = IngestionReceiver(base_path)
     experiment_id = "test-exp"
     ensemble_id = "ens-invalid"

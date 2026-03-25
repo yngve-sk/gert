@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -104,7 +103,7 @@ class TestExperimentOrchestrator:
     ) -> None:
         """run_realization raises RuntimeError if experiment has not been started."""
         with pytest.raises(RuntimeError, match="Experiment not started"):
-            orchestrator.run_realization(0, 0)
+            orchestrator.run_realization(0, 0, "run_0-uuid")
 
     def test_run_iteration_rejects_negative_iteration(
         self,
@@ -138,7 +137,7 @@ class TestExperimentOrchestrator:
         )
         orchestrator.start_experiment(config)
         with pytest.raises(ValueError, match="Realization number must be >= 0"):
-            orchestrator.run_realization(-1, 0)
+            orchestrator.run_realization(-1, 0, "run_0-uuid")
 
     def test_run_realization_rejects_negative_iteration(
         self,
@@ -155,7 +154,7 @@ class TestExperimentOrchestrator:
         )
         orchestrator.start_experiment(config)
         with pytest.raises(ValueError, match="Iteration number must be >= 0"):
-            orchestrator.run_realization(0, -1)
+            orchestrator.run_realization(0, -1, "run_0-uuid")
 
     async def test_run_iteration_determines_unique_realizations_and_executes(
         self,
@@ -223,10 +222,13 @@ class TestExperimentOrchestrator:
             observations=[],
         )
         exp_id = orchestrator.start_experiment(config)
+        ensemble_id = "run_3-ensembleuuid"
 
-        orchestrator.run_realization(realization_id=42, iteration=3)
-
-        ensemble_id = uuid.uuid5(uuid.UUID(exp_id), "3").hex
+        orchestrator.run_realization(
+            realization_id=42,
+            iteration=3,
+            ensemble_id=ensemble_id,
+        )
 
         # Verify workdir creation
         expected_workdir = tmp_workdir / exp_id / ensemble_id / "realization-42"
@@ -265,7 +267,11 @@ class TestExperimentOrchestrator:
         )
 
         orchestrator.start_experiment(config)
-        orchestrator.run_realization(realization_id=0, iteration=0)
+        orchestrator.run_realization(
+            realization_id=0,
+            iteration=0,
+            ensemble_id="run_0-uuid",
+        )
 
         assert await _wait_for_condition(output_file.exists)
         assert output_file.read_text().strip() == "hello"

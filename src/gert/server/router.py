@@ -157,7 +157,10 @@ async def start_experiment(
             status="PENDING",
         )
 
-    orchestrator.run_iteration(iteration=0, parameters=config.parameter_matrix)
+    ensemble_id = orchestrator.run_iteration(
+        iteration=0,
+        parameters=config.parameter_matrix,
+    )
 
     async def _consolidation_loop() -> None:
         """Background task to periodically consolidate responses."""
@@ -178,7 +181,6 @@ async def start_experiment(
     _consolidation_tasks.add(task)
     task.add_done_callback(_consolidation_tasks.discard)
 
-    ensemble_id = uuid.uuid5(uuid.UUID(new_id), "0").hex
     return {"status": "started", "experiment_id": new_id, "ensemble_id": ensemble_id}
 
 
