@@ -19,9 +19,8 @@ dependencies = [
     "polars>=0.19",
     "pyarrow>=13.0",    # Required for Polars Parquet support
     "psij-python>=0.1", # HPC job submission abstraction
-    "websockets>=11.0",
     "pluggy>=1.6.0",
-    "rich>=13.0"
+    "textual>=0.47.0"
 ]
 
 [project.scripts]
@@ -178,8 +177,10 @@ module = [
     "psij.*",
     "hypothesis",
     "hypothesis.*",
-    "websockets",
-    "websockets.*",
+    "pluggy",
+    "pluggy.*",
+    "textual",
+    "textual.*",
     "rich",
     "rich.*",
 ]
