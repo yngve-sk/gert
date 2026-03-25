@@ -1,5 +1,6 @@
 """Consolidation worker for GERT storage."""
 
+import asyncio
 from pathlib import Path
 
 import polars as pl
@@ -36,9 +37,30 @@ class ConsolidationWorker:
             if not queue_dir.is_dir():
                 continue
 
-            self._consolidate_ensemble(queue_dir)
+            self.consolidate_ensemble(queue_dir)
 
-    def _consolidate_ensemble(self, queue_dir: Path) -> None:
+    async def start_watching(
+        self,
+        queue_path: Path,
+        interval: float = 5.0,
+    ) -> None:
+        """Continuously drain the .jsonl queue at the specified interval.
+
+        Args:
+            queue_path: The path to the .jsonl ingestion queue.
+            interval: The interval in seconds to wait between consolidations.
+        """
+        while True:
+            await asyncio.sleep(interval)
+            # Find the parent queue_dir that contains these files
+            # to reuse the existing method. In interfaces.md it mentions
+            # taking queue_path and parquet_path, but consolidate_ensemble
+            # takes queue_dir. We can adapt it here.
+            queue_dir = queue_path.parent
+            if queue_dir.exists():
+                self.consolidate_ensemble(queue_dir)
+
+    def consolidate_ensemble(self, queue_dir: Path) -> None:
         queue_file = queue_dir / "ingestion_queue.jsonl"
         parquet_file = queue_dir / "responses.parquet"
 
