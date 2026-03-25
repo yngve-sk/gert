@@ -39,43 +39,42 @@ class ExperimentOrchestrator:
         self._workdir_manager = workdir_manager
         self._monitoring_callback = monitoring_callback
         self._config: ExperimentConfig | None = None
-        self._experiment_id: str | None = None
+        self._execution_id: str | None = None
         self._current_parameters: ParameterMatrix | None = None
 
     def start_experiment(
         self,
         config: ExperimentConfig,
+        run_count: int = 1,
     ) -> str:
         """Start a new experiment execution based on the config.
 
         Args:
             config: The immutable experiment configuration containing all
                    execution parameters and forward model definitions.
+            run_count: The sequential run count for this experiment.
 
         Returns:
-            The experiment ID for tracking execution status.
+            The execution ID for tracking execution status.
         """
         self._config = config
         exp_uuid = uuid.uuid4().hex
-        self._experiment_id = f"{config.name}-{exp_uuid}"
+        self._execution_id = f"run_{run_count}-{exp_uuid}"
         self._current_parameters = config.parameter_matrix
-        return self._experiment_id
+        return self._execution_id
 
-    def run_iteration(self, iteration: int, parameters: ParameterMatrix) -> str:
+    def run_iteration(self, iteration: int, parameters: ParameterMatrix) -> None:
         """Execute forward model for an iteration.
 
         Args:
             iteration: The iteration number.
             parameters: Parameter matrix to use.
 
-        Returns:
-            The ensemble ID for this iteration.
-
         Raises:
             RuntimeError: If the experiment has not been started.
             ValueError: If the iteration number is negative.
         """
-        if self._config is None or self._experiment_id is None:
+        if self._config is None or self._execution_id is None:
             msg = "Experiment not started. Call start_experiment first."
             raise RuntimeError(msg)
 
@@ -85,10 +84,6 @@ class ExperimentOrchestrator:
 
         self._current_parameters = parameters
 
-        # Generate a stable ensemble_id for this iteration
-        ensemble_uuid = uuid.uuid4().hex
-        ensemble_id = f"run_{iteration}-{ensemble_uuid}"
-
         # Determine unique realizations from the parameter matrix
         realizations: set[int] = set()
         if parameters.values:
@@ -96,28 +91,24 @@ class ExperimentOrchestrator:
                 realizations.update(payload.keys())
 
         for realization_id in realizations:
-            self.run_realization(realization_id, iteration, ensemble_id)
-
-        return ensemble_id
+            self.run_realization(realization_id, iteration)
 
     def run_realization(
         self,
         realization_id: int,
         iteration: int,
-        ensemble_id: str,
     ) -> None:
         """Execute forward model for a specific realization.
 
         Args:
             realization_id: The realization ID.
             iteration: The iteration number.
-            ensemble_id: The unique ID for this ensemble/run.
 
         Raises:
             RuntimeError: If the experiment has not been started.
             ValueError: If the realization_id or iteration number is negative.
         """
-        if self._config is None or self._experiment_id is None:
+        if self._config is None or self._execution_id is None:
             msg = "Experiment not started. Call start_experiment first."
             raise RuntimeError(msg)
 
@@ -130,8 +121,9 @@ class ExperimentOrchestrator:
             raise ValueError(msg)
 
         workdir = self._workdir_manager.create_workdir(
-            experiment_id=self._experiment_id,
-            ensemble_id=ensemble_id,
+            experiment_name=self._config.name,
+            execution_id=self._execution_id,
+            iteration=iteration,
             realization=realization_id,
         )
 
@@ -142,9 +134,8 @@ class ExperimentOrchestrator:
                 for arg in step.args:
                     # Replace standard placeholders
                     replaced_arg = (
-                        arg.replace("{experiment_id}", self._experiment_id)
+                        arg.replace("{execution_id}", self._execution_id)
                         .replace("{iteration}", str(iteration))  # noqa: RUF027
-                        .replace("{ensemble_id}", ensemble_id)
                         .replace("{realization}", str(realization_id))
                     )
                     cmd_parts.append(replaced_arg)

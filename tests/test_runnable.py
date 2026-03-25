@@ -4,6 +4,7 @@ import shutil
 import sys
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +31,7 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
     client = TestClient(gert_server_app)
 
     # 1. Register experiment
-    config_data = {
+    config_data: dict[str, Any] = {
         "name": "e2e-test",
         "base_working_directory": ".",
         "forward_model_steps": [
@@ -81,12 +82,17 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
     response = client.post(f"/experiments/{experiment_id}/start")
     assert response.status_code == 200
     res_json = response.json()
-    execution_id = res_json["experiment_id"]
-    ensemble_id = res_json["ensemble_id"]
+    execution_id = res_json["execution_id"]
+    iteration = res_json["iteration"]
 
     # 3. Wait for jobs to finish (local psij is usually fast)
     # We'll check for the workdir creation
-    workdir_base = Path("./workdirs").resolve() / execution_id / ensemble_id
+    workdir_base = (
+        Path("./workdirs").resolve()
+        / config_data["name"]
+        / execution_id
+        / f"iter-{iteration}"
+    )
     assert workdir_base.exists()
     # Check realization 0 and 1 workdirs
     for i in range(2):
@@ -104,15 +110,15 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
             payload = json.loads(f.read())
             # Replace placeholder if needed, but dummy FM already has real values
             client.post(
-                f"/storage/{execution_id}/ensembles/{ensemble_id}/ingest",
+                f"/storage/{execution_id}/ensembles/{iteration}/ingest",
                 json=payload,
             )
 
     worker = ConsolidationWorker(Path("./permanent_storage"))
-    worker.consolidate(execution_id)
+    worker.consolidate(config_data["name"], execution_id)
 
     # 4. Verify consolidated data
-    response = client.get(f"/storage/{execution_id}/ensembles/{ensemble_id}/responses")
+    response = client.get(f"/storage/{execution_id}/ensembles/{iteration}/responses")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2

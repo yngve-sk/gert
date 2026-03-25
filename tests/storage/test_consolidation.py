@@ -12,8 +12,9 @@ def test_consolidation_worker_creates_parquet(tmp_path: Path) -> None:
     base_path = tmp_path / "permanent_storage"
     receiver = IngestionReceiver(base_path)
     worker = ConsolidationWorker(base_path)
-    experiment_id = "test-exp"
-    ensemble_id = "ens-0"
+    experiment_name = "test-exp-name"
+    execution_id = "test-exec-id"
+    iteration = 0
 
     # 1. Receive data
     payload = ResponsePayload(
@@ -22,15 +23,27 @@ def test_consolidation_worker_creates_parquet(tmp_path: Path) -> None:
         key={"response": "FOPR"},
         value=100.0,
     )
-    receiver.receive(experiment_id, ensemble_id, payload)
+    receiver.receive(experiment_name, execution_id, iteration, payload)
 
-    queue_file = base_path / experiment_id / ensemble_id / "ingestion_queue.jsonl"
-    parquet_file = base_path / experiment_id / ensemble_id / "responses.parquet"
+    queue_file = (
+        base_path
+        / experiment_name
+        / execution_id
+        / f"iter-{iteration}"
+        / "ingestion_queue.jsonl"
+    )
+    parquet_file = (
+        base_path
+        / experiment_name
+        / execution_id
+        / f"iter-{iteration}"
+        / "responses.parquet"
+    )
     assert queue_file.exists()
     assert not parquet_file.exists()
 
     # 2. Consolidate
-    worker.consolidate(experiment_id)
+    worker.consolidate(experiment_name, execution_id)
 
     assert not queue_file.exists()
     assert parquet_file.exists()
@@ -53,13 +66,15 @@ def test_consolidation_worker_appends_to_parquet(tmp_path: Path) -> None:
     base_path = tmp_path / "permanent_storage"
     receiver = IngestionReceiver(base_path)
     worker = ConsolidationWorker(base_path)
-    experiment_id = "test-exp"
-    ensemble_id = "ens-0"
+    experiment_name = "test-exp-name"
+    execution_id = "test-exec-id"
+    iteration = 0
 
     # First round
     receiver.receive(
-        experiment_id,
-        ensemble_id,
+        experiment_name,
+        execution_id,
+        iteration,
         ResponsePayload(
             realization=0,
             source_step="step1",
@@ -67,12 +82,13 @@ def test_consolidation_worker_appends_to_parquet(tmp_path: Path) -> None:
             value=100.0,
         ),
     )
-    worker.consolidate(experiment_id)
+    worker.consolidate(experiment_name, execution_id)
 
     # Second round
     receiver.receive(
-        experiment_id,
-        ensemble_id,
+        experiment_name,
+        execution_id,
+        iteration,
         ResponsePayload(
             realization=1,
             source_step="step1",
@@ -80,9 +96,15 @@ def test_consolidation_worker_appends_to_parquet(tmp_path: Path) -> None:
             value=105.0,
         ),
     )
-    worker.consolidate(experiment_id)
+    worker.consolidate(experiment_name, execution_id)
 
-    parquet_file = base_path / experiment_id / ensemble_id / "responses.parquet"
+    parquet_file = (
+        base_path
+        / experiment_name
+        / execution_id
+        / f"iter-{iteration}"
+        / "responses.parquet"
+    )
     df = pl.read_parquet(parquet_file)
     expected = [
         {
@@ -106,16 +128,17 @@ def test_consolidate_nonexistent_experiment(tmp_path: Path) -> None:
     base_path = tmp_path / "permanent_storage"
     worker = ConsolidationWorker(base_path)
     # Should just return early without error
-    worker.consolidate("nonexistent-exp")
+    worker.consolidate("nonexistent-exp", "nonexistent-exec-id")
 
 
 def test_consolidate_ignores_files(tmp_path: Path) -> None:
     """Test consolidation ignores files that are not directories in experiment dir."""
     base_path = tmp_path / "permanent_storage"
     worker = ConsolidationWorker(base_path)
-    experiment_id = "test-exp-files"
+    experiment_name = "test-exp-files"
+    execution_id = "test-exec-id"
 
-    exp_dir = base_path / experiment_id
+    exp_dir = base_path / experiment_name / execution_id
     exp_dir.mkdir(parents=True)
 
     # Create a regular file instead of a directory
@@ -123,7 +146,7 @@ def test_consolidate_ignores_files(tmp_path: Path) -> None:
     not_a_dir.write_text("hello")
 
     # Should not crash, just ignore the file
-    worker.consolidate(experiment_id)
+    worker.consolidate(experiment_name, execution_id)
 
 
 def test_consolidate_missing_queue_file(tmp_path: Path) -> None:
@@ -131,11 +154,11 @@ def test_consolidate_missing_queue_file(tmp_path: Path) -> None:
     base_path = tmp_path / "permanent_storage"
     worker = ConsolidationWorker(base_path)
     experiment_id = "test-exp-no-queue"
-    ensemble_id = "ens-no-queue"
+    execution_id = "test-exec-no-queue"
 
-    queue_dir = base_path / experiment_id / ensemble_id
+    queue_dir = base_path / experiment_id / execution_id / "iter-0"
     queue_dir.mkdir(parents=True)
 
     # Intentionally do not create ingestion_queue.jsonl
     # Should not crash, just return early
-    worker.consolidate(experiment_id)
+    worker.consolidate(experiment_id, execution_id)

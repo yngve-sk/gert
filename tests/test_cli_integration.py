@@ -14,7 +14,7 @@ import pytest
 @pytest.fixture
 def simple_example_dir(tmp_path: Path) -> Path:
     """Fixture to copy the simple example into a temporary directory."""
-    example_src = Path("examples/simple")
+    example_src = Path(__file__).parent.parent / "examples" / "simple"
     dest = tmp_path / "simple"
     shutil.copytree(example_src, dest)
     return dest
