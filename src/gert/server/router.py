@@ -1,6 +1,7 @@
 """API router for GERT server."""
 
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -8,8 +9,6 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
-    WebSocket,
-    WebSocketDisconnect,
     status,
 )
 from fastapi import Path as FastApiPath
@@ -19,12 +18,22 @@ from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrato
 from gert.experiment_runner.job_submitter import JobSubmitter
 from gert.experiment_runner.realization_workdir_manager import RealizationWorkdirManager
 from gert.experiments.models import ExperimentConfig, IngestionPayload
-from gert.server.monitoring import RealizationStatus, monitoring_service
 from gert.storage.consolidation import ConsolidationWorker
 from gert.storage.ingestion import IngestionReceiver
 from gert.storage.query import StorageQueryAPI
 
 router = APIRouter(tags=["experiments"])
+
+
+class RealizationStatus(BaseModel):
+    """Status of a specific realization execution."""
+
+    realization_id: int
+    iteration: int
+    status: str
+    responses_emitted: int = 0
+    last_response_name: str | None = None
+    last_response_value: str | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -36,6 +45,7 @@ class ExperimentResponse(BaseModel):
 # In-memory storage for experiment configurations (Mocked storage)
 # In PR 2.1, this should move to a more persistent storage backend.
 _experiment_configs: dict[str, ExperimentConfig] = {}
+_experiment_statuses: dict[str, dict[int, RealizationStatus]] = defaultdict(dict)
 
 
 @router.post(
@@ -113,12 +123,17 @@ async def start_experiment(
         iteration: int,
         current_status: str,
     ) -> None:
-        monitoring_service.update_status(
-            experiment_id=execution_id_ref["id"],
-            realization_id=realization_id,
-            iteration=iteration,
-            status=current_status,
-        )
+        exp_id = execution_id_ref["id"]
+        state = _experiment_statuses[exp_id].get(realization_id)
+        if state:
+            state.status = current_status
+            state.iteration = iteration
+        else:
+            _experiment_statuses[exp_id][realization_id] = RealizationStatus(
+                realization_id=realization_id,
+                iteration=iteration,
+                status=current_status,
+            )
 
     orchestrator = ExperimentOrchestrator(
         job_submitter,
@@ -136,7 +151,11 @@ async def start_experiment(
             realizations.update(payload.keys())
 
     for r_id in realizations:
-        monitoring_service.update_status(new_id, r_id, 0, "PENDING")
+        _experiment_statuses[new_id][r_id] = RealizationStatus(
+            realization_id=r_id,
+            iteration=0,
+            status="PENDING",
+        )
 
     orchestrator.run_iteration(iteration=0, parameters=config.parameter_matrix)
 
@@ -152,29 +171,7 @@ async def get_experiment_status(
     experiment_id: Annotated[str, FastApiPath(alias="id")],
 ) -> list[RealizationStatus]:
     """Get the current execution status."""
-    return monitoring_service.get_experiment_status(experiment_id)
-
-
-@router.websocket("/experiments/{id}/monitor")
-async def monitor_experiment(
-    websocket: WebSocket,
-    experiment_id: Annotated[str, FastApiPath(alias="id")],
-) -> None:
-    """Real-time monitoring via WebSocket."""
-    await websocket.accept()
-    queue = await monitoring_service.subscribe(experiment_id)
-
-    # Send initial state
-    initial_states = monitoring_service.get_experiment_status(experiment_id)
-    for state in initial_states:
-        await websocket.send_json(state.model_dump())
-
-    try:
-        while True:
-            state = await queue.get()
-            await websocket.send_json(state.model_dump())
-    except WebSocketDisconnect:
-        monitoring_service.unsubscribe(experiment_id, queue)
+    return list(_experiment_statuses[experiment_id].values())
 
 
 # Storage Dependencies
@@ -223,12 +220,14 @@ async def ingest_data(
         val = payload.value
         last_value = str(val.path) if hasattr(val, "path") else str(val)
 
-    monitoring_service.increment_responses(
-        experiment_id,
-        payload.realization,
-        last_response_name=last_name,
-        last_response_value=last_value,
-    )
+    state = _experiment_statuses[experiment_id].get(payload.realization)
+    if state:
+        state.responses_emitted += 1
+        if last_name is not None:
+            state.last_response_name = last_name
+        if last_value is not None:
+            state.last_response_value = last_value
+
     return {"status": "accepted"}
 
 

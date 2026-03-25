@@ -1,40 +1,41 @@
 # GERT Monitoring Architecture
 
 ## Overview
-GERT provides real-time monitoring of experiment execution through a clean separation of concerns: data collection, API exposure, and presentation interfaces.
+GERT provides real-time monitoring of experiment execution through a clean separation of concerns: data collection, API exposure, and a rich terminal user interface (TUI).
 
 ## Design Principles
-* **Domain Agnostic:** The monitoring layer will report on generic execution states (e.g., `RUNNING`, `SUCCESS`, `FAILED`), job progress, and resource metrics, not domain-specific outputs.
-* **Interface Separation:** The backend monitoring API is completely independent of any presentation layer. Multiple interfaces can consume the same API.
-* **Extensible:** The design supports multiple presentation interfaces (e.g., CLI, Web GUI) sharing the same underlying data model and API.
-* **Real-time:** The architecture favors real-time data streaming (e.g., WebSockets, SSE) for live updates, avoiding inefficient polling where possible.
+* **Domain Agnostic:** The monitoring layer reports on generic execution states (e.g., `RUNNING`, `SUCCESS`, `FAILED`), not domain-specific outputs.
+* **Interface Separation:** The backend monitoring API is completely independent of the presentation layer.
+* **Extensible:** The design supports multiple presentation interfaces, with the TUI being the primary focus.
+* **Real-time:** The architecture favors real-time data streaming (e.g., WebSockets, SSE) to power the live TUI, avoiding inefficient polling.
 
 ## Components
 
 ### 1. Monitoring API
-A set of `FastAPI` endpoints responsible for exposing execution status, job progress, and resource metrics. This is the single source of truth for all monitoring clients.
+A set of `FastAPI` endpoints responsible for exposing execution status, job progress, and summary statistics. This is the single source of truth for the monitoring TUI.
 
-### 2. CLI Monitor
-A terminal-based live dashboard that provides a real-time view of the experiment, inspired by the live output of a CI/CD pipeline like GitHub Actions.
+### 2. TUI Monitor (Textual Application)
+A full-featured Terminal User Interface application for interactive, real-time experiment monitoring.
 
-#### Key Features
-*   **Live Status Table:** A top-level view showing the status of all realizations (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`).
-*   **Interactive Drill-Down:** The ability for a user to select a specific realization.
-*   **Live Plotting:** When a realization is selected, the CLI will display a live-updating chart for a chosen response key. The user should be able to cycle through available response keys and realizations using keyboard shortcuts.
-*   **Log Streaming:** View the live `stdout`/`stderr` from the forward model process for a selected realization.
+#### Key Features & Layout
+The application will be built using a multi-pane layout:
 
-### 3. Future Web GUI
-A potential future browser-based interface that would consume the very same monitoring APIs to provide a richer graphical experience.
+*   **Status & Progress View (Top Pane):**
+    *   **Per-Iteration Progress:** Displays a dedicated progress bar for each iteration, which fills as its associated realizations are completed.
+    *   **State Summary:** A dynamic counter that shows the aggregate number of realizations currently in each state across the entire experiment (e.g., `PENDING: 10, RUNNING: 8, COMPLETED: 32, FAILED: 2`).
+
+*   **Navigation & Detail View (Bottom Pane):**
+    *   **Interactive Tree:** A navigable tree widget with the structure `Experiment -> Iteration -> Realization`. This allows the user to drill down into the specific parts of the experiment.
+    *   **Response Viewer:** When a user selects a realization in the tree, this view will display the content of the last response JSON received for that specific realization, providing immediate insight into its output.
 
 ## Recommended Tooling
 
-*   **Rich:** For the initial implementation of the CLI monitor, the `rich` library is highly recommended. Its `Live` display capabilities are ideal for rendering the main status table and updating it without flicker. Its built-in table, progress bar, and spinner components will accelerate development.
-*   **Textual:** If the CLI monitor's interactivity needs evolve to require more complex layouts, clickable widgets, or advanced application-like behavior, the `textual` library (from the same author as `rich`) would be the next logical step.
+*   **Textual:** The TUI will be built exclusively with the `textual` framework. Its advanced features for complex layouts, widget library (`DataTable`, `Tree`, `ProgressBar`), and robust event handling system are essential for creating the rich, interactive experience required for the monitor.
 
 ## Data Model
-All monitoring data adheres to GERT's immutable configuration pattern. The execution state is strictly observable and can never be modified through any monitoring interface.
+All monitoring data adheres to GERT's immutable configuration pattern. The execution state is strictly observable and can never be modified through the monitoring interface.
 
 ## Implementation Status
 - [ ] Backend monitoring APIs
-- [ ] CLI monitor interface
+- [ ] TUI monitor application (`textual`)
 - [ ] Web GUI interface (future)
