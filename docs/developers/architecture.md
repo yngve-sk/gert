@@ -1,3 +1,36 @@
+# GERT High-Level Architecture
+
+## System Topology
+GERT is designed as an API-first, domain-agnostic orchestration engine. Its architecture is composed of three primary, decoupled services:
+
+1.  **Orchestration API (`gert.server`):** A `FastAPI` application that serves as the central control plane. It receives experiment configurations, manages execution state, and delegates tasks.
+2.  **Execution Engine (`gert.execution`):** The component responsible for managing the job lifecycle. It translates abstract execution steps from the configuration into concrete jobs via `psij-python` and submits them to the target scheduler (e.g., local process, HPC cluster).
+3.  **Storage Service (`gert.storage`):** A service that handles the ingestion and consolidation of sparse data pushed from forward models. It collects `.jsonl` fragments and incrementally builds columnar `.parquet` files for efficient analysis.
+
+---
+
+## Experiment I/O and Directory Structure
+To ensure GERT experiments are self-contained, reproducible, and portable, all file system interactions are strictly defined within the `ExperimentConfig`. Relying on the current working directory or other implicit paths is strictly forbidden.
+
+Each execution of an experiment must be isolated to prevent data corruption between runs. Therefore, GERT uses a nested directory structure based on the `experiment_id` (the immutable configuration) and then the `execution_id` (a specific run of that configuration).
+
+GERT defines two primary, configurable paths for managing experiment I/O:
+
+*   **`realization_workdirs_base` (Base for Realization Workdirs):**
+    *   **Purpose:** The top-level directory under which GERT creates temporary, isolated "realization workdirs" for executing each forward model.
+    *   **Structure:** Workdirs for a specific run are located at:
+        `<realization_workdirs_base>/<experiment_id>/<execution_id>/`
+    *   **Behavior:** This directory contains sandboxed environments for each model run and is considered ephemeral. GERT may clean up its contents after an execution completes successfully.
+
+*   **`storage_base` (Base for Persistent Storage):**
+    *   **Purpose:** The top-level directory for storing all persistent artifacts generated during an experiment, such as consolidated responses, logs, and other critical outputs.
+    *   **Structure:** Persistent artifacts for a specific run are located at:
+        `<storage_base>/<experiment_id>/<execution_id>/`
+    *   **Behavior:** This directory contains the final, valuable results of the experiment and must be preserved. Data within this path is the source of truth for resuming a failed execution.
+
+This explicit and nested approach ensures that the I/O for every execution is entirely predictable and isolated, deriving its configuration from a single, immutable source file.
+
+
 # Architecture of GERT (Generic Ensemble Reservoir Tool)
 
 ## 1. Core Experiment & Configuration (The Immutable Artifact)
