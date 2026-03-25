@@ -86,7 +86,7 @@ class TestExperimentOrchestrator:
         assert isinstance(exp_id, str)
         assert len(exp_id) > 0
         assert orchestrator._config == config
-        assert orchestrator._experiment_id == exp_id
+        assert orchestrator._execution_id == exp_id
         assert orchestrator._current_parameters == config.parameter_matrix
 
     def test_run_iteration_requires_start_experiment(
@@ -103,7 +103,7 @@ class TestExperimentOrchestrator:
     ) -> None:
         """run_realization raises RuntimeError if experiment has not been started."""
         with pytest.raises(RuntimeError, match="Experiment not started"):
-            orchestrator.run_realization(0, 0, "run_0-uuid")
+            orchestrator.run_realization(0, 0)
 
     def test_run_iteration_rejects_negative_iteration(
         self,
@@ -137,7 +137,7 @@ class TestExperimentOrchestrator:
         )
         orchestrator.start_experiment(config)
         with pytest.raises(ValueError, match="Realization number must be >= 0"):
-            orchestrator.run_realization(-1, 0, "run_0-uuid")
+            orchestrator.run_realization(-1, 0)
 
     def test_run_realization_rejects_negative_iteration(
         self,
@@ -154,7 +154,7 @@ class TestExperimentOrchestrator:
         )
         orchestrator.start_experiment(config)
         with pytest.raises(ValueError, match="Iteration number must be >= 0"):
-            orchestrator.run_realization(0, -1, "run_0-uuid")
+            orchestrator.run_realization(0, -1)
 
     async def test_run_iteration_determines_unique_realizations_and_executes(
         self,
@@ -222,16 +222,16 @@ class TestExperimentOrchestrator:
             observations=[],
         )
         exp_id = orchestrator.start_experiment(config)
-        ensemble_id = "run_3-ensembleuuid"
 
         orchestrator.run_realization(
             realization_id=42,
             iteration=3,
-            ensemble_id=ensemble_id,
         )
 
         # Verify workdir creation
-        expected_workdir = tmp_workdir / exp_id / ensemble_id / "realization-42"
+        expected_workdir = (
+            tmp_workdir / config.name / exp_id / "iter-3" / "realization-42"
+        )
         assert expected_workdir.exists()
         assert expected_workdir.is_dir()
 
@@ -270,7 +270,6 @@ class TestExperimentOrchestrator:
         orchestrator.run_realization(
             realization_id=0,
             iteration=0,
-            ensemble_id="run_0-uuid",
         )
 
         assert await _wait_for_condition(output_file.exists)

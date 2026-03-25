@@ -18,30 +18,36 @@ class StorageQueryAPI:
 
     def get_responses(
         self,
-        experiment_id: str,
-        ensemble_id: str,
+        experiment_name: str,
+        execution_id: str,
+        iteration: int,
     ) -> pl.DataFrame:
-        """Retrieve all consolidated responses for an experiment and ensemble.
+        """Retrieve all consolidated responses for an experiment and iteration.
 
         Args:
-            experiment_id: The unique ID of the experiment.
-            ensemble_id: The unique ID of the ensemble.
+            experiment_name: The name of the experiment.
+            execution_id: The unique ID of the execution.
+            iteration: The iteration number.
 
         Returns:
             A polars DataFrame containing the experiment responses.
 
         Raises:
-            FileNotFoundError: If the experiment, ensemble, or its consolidated
+            FileNotFoundError: If the experiment, iteration, or its consolidated
                 data doesn't exist.
         """
         parquet_file = (
-            self._base_storage_path / experiment_id / ensemble_id / "responses.parquet"
+            self._base_storage_path
+            / experiment_name
+            / execution_id
+            / f"iter-{iteration}"
+            / "responses.parquet"
         )
 
         if not parquet_file.exists():
             msg = (
-                f"Consolidated data for experiment '{experiment_id}' "
-                f"and ensemble '{ensemble_id}' not found."
+                f"Consolidated data for experiment '{experiment_name}', "
+                f"execution '{execution_id}', and iteration '{iteration}' not found."
             )
             raise FileNotFoundError(msg)
 

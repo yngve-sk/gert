@@ -1,6 +1,5 @@
 import asyncio
 import shutil
-import uuid
 from collections.abc import Generator
 from pathlib import Path
 
@@ -38,9 +37,10 @@ def test_storage_integration_blast(clean_storage: None) -> None:
     }
     response = client.post("/experiments", json=config_data)
     assert response.status_code == 201
-    experiment_id = response.json()["id"]
+    execution_id = response.json()["id"]
+    experiment_name = "blast-test"
 
-    ensemble_id = uuid.uuid4().hex
+    iteration = 0
 
     # 1. Ingest 100 payloads
     payloads = [
@@ -55,16 +55,16 @@ def test_storage_integration_blast(clean_storage: None) -> None:
 
     for payload in payloads:
         response = client.post(
-            f"/storage/{experiment_id}/ensembles/{ensemble_id}/ingest",
+            f"/storage/{execution_id}/ensembles/{iteration}/ingest",
             json=payload,
         )
         assert response.status_code == 202
 
     worker = ConsolidationWorker(Path("./permanent_storage"))
-    worker.consolidate(experiment_id)
+    worker.consolidate(experiment_name, execution_id)
 
     # 2. Retrieve responses
-    response = client.get(f"/storage/{experiment_id}/ensembles/{ensemble_id}/responses")
+    response = client.get(f"/storage/{execution_id}/ensembles/{iteration}/responses")
     assert response.status_code == 200
 
     data = response.json()
@@ -93,9 +93,10 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
     }
     response = client.post("/experiments", json=config_data)
     assert response.status_code == 201
-    experiment_id = response.json()["id"]
+    execution_id = response.json()["id"]
+    experiment_name = "concurrent-blast-test"
 
-    ensemble_id = uuid.uuid4().hex
+    iteration = 0
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=gert_server_app),
@@ -111,7 +112,7 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
             }
             tasks.append(
                 ac.post(
-                    f"/storage/{experiment_id}/ensembles/{ensemble_id}/ingest",
+                    f"/storage/{execution_id}/ensembles/{iteration}/ingest",
                     json=payload,
                 ),
             )
@@ -122,11 +123,11 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
         assert response.status_code == 202
 
     worker = ConsolidationWorker(Path("./permanent_storage"))
-    worker.consolidate(experiment_id)
+    worker.consolidate(experiment_name, execution_id)
 
     # Verify via regular TestClient
     client = TestClient(gert_server_app)
-    response = client.get(f"/storage/{experiment_id}/ensembles/{ensemble_id}/responses")
+    response = client.get(f"/storage/{execution_id}/ensembles/{iteration}/responses")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 100

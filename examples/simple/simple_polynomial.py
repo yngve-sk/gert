@@ -10,9 +10,9 @@ def main() -> None:
         description="A simple polynomial forward model for GERT.",
     )
     parser.add_argument(
-        "--experiment-id",
+        "--execution-id",
         required=True,
-        help="The GERT experiment ID",
+        help="The GERT execution ID",
     )
     parser.add_argument(
         "--realization",
@@ -21,10 +21,10 @@ def main() -> None:
         help="The realization number",
     )
     parser.add_argument(
-        "--ensemble-id",
+        "--iteration",
         required=True,
-        type=str,
-        help="The ensemble ID",
+        type=int,
+        help="The iteration number",
     )
     parser.add_argument(
         "--api-url",
@@ -50,8 +50,7 @@ def main() -> None:
     )
 
     ingest_url = (
-        f"{args.api_url}/storage/{args.experiment_id}"
-        f"/ensembles/{args.ensemble_id}/ingest"
+        f"{args.api_url}/storage/{args.execution_id}/ensembles/{args.iteration}/ingest"
     )
 
     try:

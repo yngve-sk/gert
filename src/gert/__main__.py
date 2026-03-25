@@ -99,7 +99,7 @@ def _ensure_server(
 def _poll_for_completion(
     client: httpx.Client,
     execution_id: str,
-    ensemble_id: str,
+    iteration: int,
     expected_count: int,
 ) -> None:
     """Poll the API until all realizations are completed."""
@@ -107,7 +107,7 @@ def _poll_for_completion(
     while True:
         try:
             resp = client.get(
-                f"/storage/{execution_id}/ensembles/{ensemble_id}/responses",
+                f"/storage/{execution_id}/ensembles/{iteration}/responses",
             )
             resp.raise_for_status()
             responses = resp.json()
@@ -151,25 +151,25 @@ def run_experiment(
             response = client.post(f"/experiments/{config_id}/start")
             response.raise_for_status()
             res_json = response.json()
-            execution_id = res_json["experiment_id"]
-            ensemble_id = res_json["ensemble_id"]
+            execution_id = res_json["execution_id"]
+            iteration = res_json["iteration"]
             print(
                 f"✅ Execution started (Execution ID: {execution_id}, "
-                f"Ensemble ID: {ensemble_id})",
+                f"Iteration: {iteration})",
             )
 
             if monitor:
                 expected_count = _get_expected_realizations(config_data)
-                start_monitor(api_url, execution_id, expected_count, ensemble_id)
+                start_monitor(api_url, execution_id, expected_count, iteration)
             elif server_process is not None or wait_for_completion:
                 expected_count = _get_expected_realizations(config_data)
-                _poll_for_completion(client, execution_id, ensemble_id, expected_count)
+                _poll_for_completion(client, execution_id, iteration, expected_count)
             else:
                 print("\nExperiment is running in the background.")
                 print("You can query the consolidated responses using:")
                 print(
                     f"  curl {api_url}/storage/{execution_id}"
-                    f"/ensembles/{ensemble_id}/responses",
+                    f"/ensembles/{iteration}/responses",
                 )
 
         except httpx.ConnectError:

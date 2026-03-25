@@ -5,12 +5,12 @@
       "name": "slow_polynomial",
       "executable": "slow_polynomial.py",
       "args": [
-        "--experiment-id",
-        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
         "--realization",
         "{realization}",
-        "--ensemble-id",
-        "{ensemble_id}"
+        "--iteration",
+        "{iteration}"
       ]
     }
   ],
