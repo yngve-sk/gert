@@ -197,3 +197,66 @@ update_schedule:
 ```
 
 This tells the orchestrator to execute the math of `kalman_update` three times iteratively. This makes the system fully extensible to user-defined algorithms while keeping the orchestration and mathematics clearly decoupled.
+
+
+## 5. Testing Strategy: Update Algorithm Plugins
+
+This document outlines the testing philosophy and requirements for all Data Assimilation (DA) update algorithms in GERT.
+
+Because GERT update algorithms (e.g., ES, EnIF, Localized ES) are implemented as isolated plugins conforming to the `UpdateAlgorithm` ABC, they must be tested in strict isolation. We do not run the forward simulator or the `ExperimentOrchestrator` to test the math. Instead, we pass constructed prior, response, and observation DataFrames directly to the plugin's `perform_update` method and assert against the returned posterior DataFrame.
+
+### 1. Core Testing Principles
+
+*   **Fix Random Seeds:** DA algorithms rely heavily on random observation perturbations. Every test must explicitly pass a `random_seed` in the `algorithm_arguments` to ensure deterministic, reproducible results across CI/CD runs.
+*   **Test the Contract, Not Just the Math:** Ensure the plugin respects the `UpdateAlgorithm` interface.
+    *   Does it return a Polars DataFrame with the exact same schema/columns as the input?
+    *   Does it leave parameters not in `updatable_parameter_keys` strictly untouched?
+*   **Type and Shape Safety:** Ensure the algorithm handles edge cases in matrix reshaping (e.g., $1 \times N$, $N \times 1$) without throwing broadcast errors.
+
+### 2. Mathematical Sanity Checks
+
+Every update algorithm must pass the following fundamental DA sanity checks.
+
+#### A. Variance Reduction
+
+The defining characteristic of an information filter or Kalman update is that assimilating data reduces uncertainty.
+
+*   **Assertion:** The standard deviation (or variance) of the ensemble for any updated parameter must be less than or equal to its prior standard deviation.
+*   **Note:** With very small ensembles or extreme noise, sampling error can occasionally cause slight variance increases, so this test should be run with a sufficiently large ensemble ($N > 100$) or a relaxed tolerance.
+
+#### B. Mean Shift (Pull to Truth)
+
+The ensemble mean should move toward a state that better explains the observations.
+
+*   **Assertion:** Create a prior biased heavily away from an observation. After the update, the absolute difference between the prior mean and the "true" parameter value should be greater than the absolute difference between the posterior mean and the "true" parameter value.
+
+#### C. The "Zero-Information" Update
+
+If the observation errors ($\sigma$) are set to near-infinity (or inflation $\alpha$ is massive), the update should ignore the observations.
+
+*   **Assertion:** The posterior parameters should be virtually identical to the prior parameters.
+
+### 3. Test Case Sizing and Design
+
+To thoroughly test the algorithms, tests should be tiered by dimensionality.
+
+#### The "Micro" Case (Debugging & Shape validation)
+*   **Dimensions:** 1 Parameter, 1 Observation, 2 Realizations.
+*   **Purpose:** This is the absolute smallest valid matrix size. It guarantees your algorithm doesn't accidentally collapse 2D arrays into 1D arrays or hardcode expected dimensionalities. It is also small enough that you can calculate the expected posterior by hand on a piece of paper and assert against exact floats.
+
+#### The "Standard" Case (Covariance validation)
+*   **Dimensions:** 3-5 Parameters, 2-3 Observations, 50-100 Realizations.
+*   **Purpose:** This tests cross-covariances. Set up the prior such that Parameter A and Parameter B are strongly correlated. Observe only a response related to Parameter A.
+*   **Assertion:** Parameter B must also update, proving that the algorithm correctly applies the covariance matrix to unobserved variables.
+
+#### The "Over-determined" Case (Subspace inversion check)
+*   **Dimensions:** 5 Parameters, 50 Observations, 10 Realizations.
+*   **Purpose:** In many algorithms, if $N_{obs} > N_{realizations}$, standard matrix inversion will fail due to singularity.
+*   **Assertion:** The algorithm must complete successfully, proving it correctly implements subspace inversion (Truncated SVD) or pseudo-inverses.
+
+### 4. Edge Cases to Cover
+
+*   **Ensemble Collapse:** Feed the algorithm a prior where every single realization has the exact same value (variance = 0). The algorithm should either raise a specific, handled error, or return the prior cleanly without crashing due to a divide-by-zero error.
+*   **Missing Observations:** Pass an observation DataFrame containing NaN or null values. The algorithm must handle this gracefully (typically by dropping that observation from the state vector).
+*   **Missing Realizations:** Pass simulated responses where one realization failed (contains NaN). The algorithm must drop that realization from the update math and return the DataFrame cleanly.
+*   **Localization Matrix (Rho) Mismatches:** For localized algorithms, pass a rho matrix in `algorithm_arguments` that has the wrong shape (e.g., $N_{params} \times (N_{obs} + 1)$). It should raise a clear ValueError.
