@@ -260,3 +260,64 @@ To thoroughly test the algorithms, tests should be tiered by dimensionality.
 *   **Missing Observations:** Pass an observation DataFrame containing NaN or null values. The algorithm must handle this gracefully (typically by dropping that observation from the state vector).
 *   **Missing Realizations:** Pass simulated responses where one realization failed (contains NaN). The algorithm must drop that realization from the update math and return the DataFrame cleanly.
 *   **Localization Matrix (Rho) Mismatches:** For localized algorithms, pass a rho matrix in `algorithm_arguments` that has the wrong shape (e.g., $N_{params} \times (N_{obs} + 1)$). It should raise a clear ValueError.
+
+### 5. Snapshot (Regression) Testing Strategy
+While behavioral tests (verifying variance reduction, mean shifts) prove that the algorithm works mathematically, snapshot testing proves that the algorithm hasn't accidentally changed during a code refactor.
+
+Because data assimilation involves complex linear algebra (e.g., SVD, Cholesky decompositions, pseudo-inverses), even a seemingly harmless refactor can introduce silent numerical regressions. Snapshots act as a "gold standard" freeze of the algorithm's output.
+
+The "Two-Snapshot" Rule
+For every UpdateAlgorithm plugin, you must implement exactly two snapshot tests:
+
+The Small/Dummy Snapshot:
+
+Scope: 2-3 Parameters, 1-2 Observations, 5-10 Realizations.
+
+Purpose: If this snapshot fails, the matrices are small enough that a developer can manually trace the linear algebra to find exactly where the math diverged.
+
+The Comprehensive/Large Snapshot:
+
+Scope: "Standard Case" sizing (e.g., 50 parameters, 100 observations, 100 realizations).
+
+Purpose: Ensures that complex matrix interactions—such as subspace inversion truncations, overlapping localization matrices, and large cross-covariances—do not drift or break when dependencies are updated.
+
+Using pytest-snapshot Safely with Floating-Point Math
+We use the pytest-snapshot library to manage our regression files.
+
+CRITICAL WARNING: Low-level C/Fortran solvers calculate the 14th decimal place slightly differently depending on the CPU architecture (x86 vs. ARM) and OS. Because pytest-snapshot performs exact string matching, comparing raw CSV outputs will cause CI pipelines to fail randomly.
+
+The Standard: Before passing a Polars DataFrame to snapshot.assert_match(), you must round all floating-point columns to a hardware-safe precision (5 decimal places).
+
+Example Implementation
+```Python
+import polars as pl
+from gert.plugins.kalman import KalmanUpdateStep
+
+def test_es_update_comprehensive_snapshot(snapshot):
+    # 1. Load the fixed inputs
+    prior = pl.read_parquet("tests/fixtures/standard_prior.parquet")
+    responses = pl.read_parquet("tests/fixtures/standard_responses.parquet")
+    observations = pl.read_parquet("tests/fixtures/standard_obs.parquet")
+
+    # 2. Run the plugin (CRITICAL: Fix the random_seed!)
+    plugin = KalmanUpdateStep()
+    posterior = plugin.perform_update(
+        current_parameters=prior,
+        simulated_responses=responses,
+        observations=observations,
+        updatable_parameter_keys=["PORO", "PERM", "MULT_Z"],
+        algorithm_arguments={"alpha": 1.0, "random_seed": 42}
+    )
+
+    # 3. Round floating-point columns to prevent cross-platform hardware drift
+    rounded_posterior = posterior.select(
+        pl.all().exclude(pl.Float64, pl.Float32),
+        pl.col(pl.Float64, pl.Float32).round(5)
+    )
+
+    # 4. Assert against the snapshot (use `pytest --snapshot-update` to generate/update)
+    snapshot.assert_match(
+        rounded_posterior.write_csv(),
+        'standard_posterior_es.csv'
+    )
+```
