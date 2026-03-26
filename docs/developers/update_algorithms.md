@@ -52,18 +52,23 @@ class UpdateAlgorithm(ABC):
         Performs the data assimilation update for a single iteration.
 
         Args:
-            current_parameters: A DataFrame of the full parameter set for the
-                                current iteration. Rows are realizations,
-                                columns are parameter keys.
-            simulated_responses: A DataFrame of the consolidated simulated
-                                 responses that have corresponding observations.
-                                 Rows are realizations, columns are response keys.
-                                 The data is aligned with `observations`.
+            current_parameters: A Wide DataFrame of the full parameter set for the
+                                current iteration. Rows are realizations, columns are
+                                fully unrolled parameter features (e.g., `poro_0, poro_1`).
+                                The Storage API has already read the disparate
+                                schema-partitioned Parquet files, structurally
+                                flattened 2D/3D grids, and concatenated everything
+                                into this dense matrix format.
+            simulated_responses: A Wide DataFrame of the consolidated simulated
+                                 responses. Rows are realizations, columns are response
+                                 features. The Storage API has already flattened the
+                                 response schemas (e.g., transient well logs) and guarantees
+                                 these columns are strictly aligned with `observations`.
             observations: A DataFrame containing the observed values and their
-                          standard deviations. The columns align with
-                          `simulated_responses`.
-            updatable_parameter_keys: The specific list of parameter keys from
-                                      `current_parameters` that the algorithm
+                          standard deviations. The rows/features strictly align with
+                          the columns of `simulated_responses`.
+            updatable_parameter_keys: The specific list of parameter prefixes or exact
+                                      keys from `current_parameters` that the algorithm
                                       is permitted to modify. This is derived
                                       from the `updatable_parameters` tags in
                                       the `UpdateStep` config.
@@ -72,10 +77,11 @@ class UpdateAlgorithm(ABC):
                                  configuration (e.g., `{"alpha": 4.0}`).
 
         Returns:
-            A DataFrame containing the complete, updated parameter matrix for the
+            A Wide DataFrame containing the complete, updated parameter matrix for the
             next iteration. The schema must be identical to `current_parameters`.
-            Parameters not in `updatable_parameter_keys` must be returned
-            unmodified.
+            Parameters not matching `updatable_parameter_keys` must be returned
+            unmodified. The Storage API will handle rebuilding the schemas and
+            writing the partitioned Parquet files back to disk.
         """
         pass
 ```
@@ -121,10 +127,9 @@ class KalmanUpdateStep(UpdateAlgorithm):
         # 1. Check for 'alpha' in algorithm_arguments (default to 1.0).
         # 2. If alpha > 1.0, inflate the standard deviations in the
         #    `observations` DataFrame by sqrt(alpha).
-        # 3. Compute covariance matrices from the DataFrames.
-        # 4. Apply the Kalman gain formula.
-        # 5. Update the `updatable_parameter_keys` in a new DataFrame.
-        # 6. Return the new, complete parameter DataFrame.
+        # 3. Extract matrices from the provided Wide DataFrames.
+        # 4. Apply the Kalman gain formula on the dense NumPy matrices.
+        # 5. Return the new, complete Wide parameter DataFrame.
         pass
 ```
 
@@ -199,7 +204,51 @@ update_schedule:
 This tells the orchestrator to execute the math of `kalman_update` three times iteratively. This makes the system fully extensible to user-defined algorithms while keeping the orchestration and mathematics clearly decoupled.
 
 
-## 5. Testing Strategy: Update Algorithm Plugins
+
+
+## 5. Spatial Topologies and Parameter Graphs
+
+Data assimilation algorithms that compute sparse precision matrices (such as the Ensemble Information Filter, EnIF) require explicit mathematical graphs defining the spatial relationships (correlation priors) between parameters.
+
+Rather than forcing the user to define these topologies manually or hardcoding domain-specific concepts (e.g., `FIELD` vs `SURFACE`), GERT's `StorageQueryAPI` **automatically infers the topology** based on the primary key schema of the stored data.
+
+### Auto-Generation Rules
+*   **1D/2D/3D Lattice Graphs:** If a parameter is stored in a table with continuous integer coordinate keys (e.g., `[i, j, k]`), GERT assumes a structured Cartesian grid. It automatically generates a standard grid graph linking adjacent indices.
+*   **Distance/KNN Graphs:** If a parameter is stored with float coordinate keys (e.g., `[x, y, z]`), GERT assumes a point cloud and generates distance-based connections.
+*   **Independent Scalars:** If a parameter has no spatial keys, it is treated as a trivial 1-node graph (completely independent).
+
+### Consuming Graphs in Plugins
+When the `ExperimentOrchestrator` invokes an `UpdateAlgorithm`, any auto-generated graphs are injected directly into the `algorithm_arguments` payload.
+
+For example, an EnIF plugin can expect:
+```python
+# The orchestrator injects standard networkx graphs for spatial fields
+param_graphs = algorithm_arguments.get("parameter_graphs", {})
+porosity_graph = param_graphs.get("porosity") # Returns a networkx Graph
+```
+
+### The Escape Hatch (Custom Topologies)
+The core assumption of auto-generation is that *logical coordinate adjacency equals physical adjacency*. In real-world modeling (e.g., geosciences), this is often false due to:
+*   Geological Faults (adjacent coordinates are physically blocked).
+*   Dead Cells / Pinch-outs (inactive blocks distorting adjacency).
+*   Unstructured or Corner-Point Grids (where flat `cell_index` integers hide the true 3D spatial connections).
+
+When the naive grid assumption fails, users can override the auto-generation by providing a custom topology file. This is configured explicitly in the `update_schedule`:
+
+```yaml
+update_schedule:
+  - name: "Faulted_EnIF_Step"
+    algorithm: "enif_update"
+    arguments:
+      # Instructs GERT to bypass auto-generation for these specific fields
+      # and parse the provided user-defined edges instead.
+      custom_topology_files:
+        porosity: "path/to/eclipse_fault_edges_poro.csv"
+        permeability: "path/to/eclipse_fault_edges_perm.csv"
+```
+This ensures GERT remains entirely domain-agnostic while still providing the exact customizability required by domain experts.
+
+## 6. Testing Strategy: Update Algorithm Plugins
 
 This document outlines the testing philosophy and requirements for all Data Assimilation (DA) update algorithms in GERT.
 
