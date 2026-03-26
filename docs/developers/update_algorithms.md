@@ -59,14 +59,14 @@ class UpdateAlgorithm(ABC):
                                 schema-partitioned Parquet files, structurally
                                 flattened 2D/3D grids, and concatenated everything
                                 into this dense matrix format.
-            simulated_responses: A Wide DataFrame of the consolidated simulated
-                                 responses. Rows are realizations, columns are response
-                                 features. The Storage API has already flattened the
-                                 response schemas (e.g., transient well logs) and guarantees
-                                 these columns are strictly aligned with `observations`.
-            observations: A DataFrame containing the observed values and their
-                          standard deviations. The rows/features strictly align with
-                          the columns of `simulated_responses`.
+            simulated_responses: A Tidy (Long) DataFrame of the consolidated simulated
+                                 responses vertically stacked from storage. Schema:
+                                 `[realization, <composite_keys...>, value]`.
+                                 The Update Algorithm must filter this using the
+                                 provided `observations` DataFrame.
+            observations: A DataFrame containing the observed values, standard deviations,
+                          and the composite keys required to isolate the specific
+                          responses from `simulated_responses` (e.g., `well_id`, `time`).
             updatable_parameter_keys: The specific list of parameter prefixes or exact
                                       keys from `current_parameters` that the algorithm
                                       is permitted to modify. This is derived
