@@ -36,11 +36,12 @@ You will need to use numpy and imports from iterative_ensemble_smoother (ESMDA, 
 2. Data Extraction & Reshaping:
 The library strictly expects features in rows and realizations in columns.
 
-Parameters (X): Extract columns specified in updatable_parameter_keys from current_parameters. Transpose it to a numpy array of shape (num_parameters, ensemble_size).
+Parameters (X): `current_parameters` arrives as a Wide DataFrame where spatial 2D/3D grids have been flattened by the Storage API into individual columns (e.g., `porosity_0`, `porosity_1`). `updatable_parameter_keys` contains the *base names* (e.g., `["porosity"]`). Extract all unrolled columns matching or starting with `{base_name}_`. Transpose the resulting matrix to a numpy array of shape `(num_parameters, ensemble_size)`.
 
-Responses (Y): Extract simulated_responses and transpose it to a numpy array of shape (num_observations, ensemble_size).
+Responses (Y): The `simulated_responses` arrives as a massive, vertically stacked Tidy (Long) DataFrame `[realization, <composite_keys...>, value]`.
+Use the composite keys present in the `observations` DataFrame (e.g., `well_id`, `time`) to execute an Inner Join against `simulated_responses`. Pivot the filtered result into a dense matrix of shape `(ensemble_size, num_observations)`, ensuring columns perfectly align with the rows of `observations`. Finally, transpose it to a numpy array of shape `(num_observations, ensemble_size)` as required by the library.
 
-Observations (d): Extract the observed values from the observations DataFrame as a 1D numpy float array of shape (num_observations,).
+Observations (d): Extract the observed values from the `observations` DataFrame as a 1D numpy float array of shape `(num_observations,)`.
 
 Covariance (C
 D
@@ -84,11 +85,11 @@ def loc_func(K: np.ndarray) -> np.ndarray:
 X_updated = smoother.assimilate_batch(X=X, localization_callback=loc_func)
 5. Post-Processing & Return:
 
-Transpose X_updated back to the shape (ensemble_size, num_parameters).
+Transpose `X_updated` back to the shape `(ensemble_size, num_parameters)`.
 
-Create a copy of current_parameters and overwrite the columns in updatable_parameter_keys with the newly calculated values.
+Create a copy of `current_parameters` and overwrite the unrolled Wide columns belonging to `updatable_parameter_keys` with the newly calculated values.
 
-Return the updated Polars DataFrame.
+Return the updated Wide Polars DataFrame.
 
 6. Plugin Registration & Project Setup:
 Please provide the necessary boilerplate to register this class as a GERT plugin:
