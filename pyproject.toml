@@ -20,7 +20,12 @@ dependencies = [
     "pyarrow>=13.0",    # Required for Polars Parquet support
     "psij-python>=0.1", # HPC job submission abstraction
     "pluggy>=1.6.0",
-    "textual>=0.47.0"
+    "textual>=0.47.0",
+    "graphite_maps",
+    "scikit-learn",
+    "scipy",
+    "numpy",
+    "networkx",
 ]
 
 [project.scripts]
@@ -31,6 +36,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "pytest-snapshot",
     "hypothesis",
     "mypy==1.19.1",
     "pre-commit",
@@ -119,6 +125,10 @@ allowed-confusables = ["–"]
     "ANN205",  # Missing return type annotation for staticmethod
     "ANN206",  # Missing return type annotation for classmethod
     "S106",    # Possible hardcoded password (test data often contains dummy passwords)
+    "NPY002",  # Allow legacy np.random.seed for snapshots
+    "ANN401",  # Allow Any type for pytest fixtures
+    "ERA001",  # Commented out code (fine for test documentation)
+    "F841",    # Unused local variable (fine for test setup)
     "S105",    # Possible hardcoded password (test data often contains dummy secrets)
     "S608",    # Possible SQL injection vector (tests may use raw SQL)
     "PLR2004", # Magic value used in comparison (tests often use magic numbers)
@@ -147,7 +157,12 @@ allowed-confusables = ["–"]
     "T201",    # print found (allowed for examples)
     "INP001",  # Implicit namespace package
 ]
-
+"src/gert/plugins/enif_update.py" = [
+    "N806",    # Uppercase variable names allowed to match math papers
+    "C901",    # perform_update complexity is fine
+    "E501",    # Fine for algorithms
+    "FURB118", # Fine to use lambda
+]
 [tool.ruff.lint.pylint]
 max-args = 20
 
@@ -183,8 +198,20 @@ module = [
     "textual.*",
     "rich",
     "rich.*",
+    "graphite_maps",
+    "graphite_maps.*",
+    "sklearn",
+    "sklearn.*",
+    "scipy",
+    "scipy.*",
+    "numpy",
+    "numpy.*",
+    "networkx",
+    "networkx.*",
 ]
 ignore_missing_imports = true
 
 [tool.uv]
 fork-strategy = "requires-python"
+[project.entry-points."gert"]
+enif_update = "gert.plugins.registration"
