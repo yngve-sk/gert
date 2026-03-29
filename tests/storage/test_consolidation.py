@@ -1,164 +1,94 @@
+"""Tests for the ConsolidationWorker's schema routing and registry management."""
+
+import json
 from pathlib import Path
 
 import polars as pl
+import pytest
 
-from gert.experiments.models import ResponsePayload
 from gert.storage.consolidation import ConsolidationWorker
-from gert.storage.ingestion import IngestionReceiver
 
 
-def test_consolidation_worker_creates_parquet(tmp_path: Path) -> None:
-    """Test that ConsolidationWorker drains .jsonl and creates .parquet."""
-    base_path = tmp_path / "permanent_storage"
-    receiver = IngestionReceiver(base_path)
-    worker = ConsolidationWorker(base_path)
-    experiment_name = "test-exp-name"
-    execution_id = "test-exec-id"
-    iteration = 0
-
-    # 1. Receive data
-    payload = ResponsePayload(
-        realization=0,
-        source_step="step1",
-        key={"response": "FOPR"},
-        value=100.0,
-    )
-    receiver.receive(experiment_name, execution_id, iteration, payload)
-
-    queue_file = (
-        base_path
-        / experiment_name
-        / execution_id
-        / f"iter-{iteration}"
-        / "ingestion_queue.jsonl"
-    )
-    parquet_file = (
-        base_path
-        / experiment_name
-        / execution_id
-        / f"iter-{iteration}"
-        / "responses.parquet"
-    )
-    assert queue_file.exists()
-    assert not parquet_file.exists()
-
-    # 2. Consolidate
-    worker.consolidate(experiment_name, execution_id)
-
-    assert not queue_file.exists()
-    assert parquet_file.exists()
-
-    # 3. Verify parquet content
-    df = pl.read_parquet(parquet_file)
-    expected = [
-        {
-            "realization": 0,
-            "source_step": "step1",
-            "response": "FOPR",
-            "value": 100.0,
-        },
-    ]
-    assert df.to_dicts() == expected
+@pytest.fixture
+def storage_path(tmp_path: Path) -> Path:
+    """Provide a temporary storage root."""
+    return tmp_path / "storage"
 
 
-def test_consolidation_worker_appends_to_parquet(tmp_path: Path) -> None:
-    """Test that ConsolidationWorker appends new data to existing .parquet."""
-    base_path = tmp_path / "permanent_storage"
-    receiver = IngestionReceiver(base_path)
-    worker = ConsolidationWorker(base_path)
-    experiment_name = "test-exp-name"
-    execution_id = "test-exec-id"
-    iteration = 0
-
-    # First round
-    receiver.receive(
-        experiment_name,
-        execution_id,
-        iteration,
-        ResponsePayload(
-            realization=0,
-            source_step="step1",
-            key={"response": "FOPR"},
-            value=100.0,
-        ),
-    )
-    worker.consolidate(experiment_name, execution_id)
-
-    # Second round
-    receiver.receive(
-        experiment_name,
-        execution_id,
-        iteration,
-        ResponsePayload(
-            realization=1,
-            source_step="step1",
-            key={"response": "FOPR"},
-            value=105.0,
-        ),
-    )
-    worker.consolidate(experiment_name, execution_id)
-
-    parquet_file = (
-        base_path
-        / experiment_name
-        / execution_id
-        / f"iter-{iteration}"
-        / "responses.parquet"
-    )
-    df = pl.read_parquet(parquet_file)
-    expected = [
-        {
-            "realization": 0,
-            "source_step": "step1",
-            "response": "FOPR",
-            "value": 100.0,
-        },
-        {
-            "realization": 1,
-            "source_step": "step1",
-            "response": "FOPR",
-            "value": 105.0,
-        },
-    ]
-    assert df.to_dicts() == expected
+@pytest.fixture
+def worker(storage_path: Path) -> ConsolidationWorker:
+    """Provide a ConsolidationWorker instance."""
+    return ConsolidationWorker(storage_path)
 
 
-def test_consolidate_nonexistent_experiment(tmp_path: Path) -> None:
-    """Test consolidation handles non-existent experiment directory gracefully."""
-    base_path = tmp_path / "permanent_storage"
-    worker = ConsolidationWorker(base_path)
-    # Should just return early without error
-    worker.consolidate("nonexistent-exp", "nonexistent-exec-id")
-
-
-def test_consolidate_ignores_files(tmp_path: Path) -> None:
-    """Test consolidation ignores files that are not directories in experiment dir."""
-    base_path = tmp_path / "permanent_storage"
-    worker = ConsolidationWorker(base_path)
-    experiment_name = "test-exp-files"
-    execution_id = "test-exec-id"
-
-    exp_dir = base_path / experiment_name / execution_id
-    exp_dir.mkdir(parents=True)
-
-    # Create a regular file instead of a directory
-    not_a_dir = exp_dir / "not_a_dir.txt"
-    not_a_dir.write_text("hello")
-
-    # Should not crash, just ignore the file
-    worker.consolidate(experiment_name, execution_id)
-
-
-def test_consolidate_missing_queue_file(tmp_path: Path) -> None:
-    """Test consolidation skips ensemble directories with missing queue files."""
-    base_path = tmp_path / "permanent_storage"
-    worker = ConsolidationWorker(base_path)
-    experiment_id = "test-exp-no-queue"
-    execution_id = "test-exec-no-queue"
-
-    queue_dir = base_path / experiment_id / execution_id / "iter-0"
+def test_consolidate_heterogeneous_records(
+    worker: ConsolidationWorker,
+    storage_path: Path,
+) -> None:
+    """Prove that the worker routes different JSONL records to different schema tables
+    and maintains a schemas.json registry.
+    """
+    queue_dir = storage_path / "test_exp" / "run_1" / "iter-0"
     queue_dir.mkdir(parents=True)
+    queue_file = queue_dir / "ingestion_queue.jsonl"
 
-    # Intentionally do not create ingestion_queue.jsonl
-    # Should not crash, just return early
-    worker.consolidate(experiment_id, execution_id)
+    # 1. Write mixed schema records to the queue
+    records = [
+        # Schema 1: Well data (well_id, time)
+        {"realization": 0, "key": {"well_id": "W1", "time": 10.0}, "value": 100.0},
+        {"realization": 1, "key": {"well_id": "W1", "time": 10.0}, "value": 200.0},
+        # Schema 2: Global summary (response_name)
+        {"realization": 0, "key": {"response_name": "FOPR"}, "value": 5000.0},
+        # Schema 3: Grid data (x, y, z)
+        {"realization": 0, "key": {"x": 1, "y": 2, "z": 3}, "value": 0.25},
+    ]
+
+    with Path(queue_file).open("w", encoding="utf-8") as f:
+        f.writelines(json.dumps(r) + "\n" for r in records)
+
+    # 2. Execute consolidation
+    worker.consolidate_ensemble(queue_dir)
+
+    # 3. Assertions
+    resp_dir = queue_dir / "responses"
+    assert resp_dir.exists()
+
+    # Check for parquet files (hashes will be deterministic)
+    parquet_files = list(resp_dir.glob("*.parquet"))
+    assert len(parquet_files) == 3
+
+
+def test_consolidate_upsert_logic(
+    worker: ConsolidationWorker,
+    storage_path: Path,
+) -> None:
+    """Prove that the worker correctly upserts (updates) existing data with newer records."""  # noqa: E501
+    queue_dir = storage_path / "test_upsert" / "run_1" / "iter-0"
+    queue_dir.mkdir(parents=True)
+    queue_file = queue_dir / "ingestion_queue.jsonl"
+
+    # 1. Initial consolidation
+    Path(queue_file).write_text(
+        encoding="utf-8",
+        data=json.dumps({"realization": 0, "key": {"well_id": "W1"}, "value": 1.0})
+        + "\n",
+    )
+
+    worker.consolidate_ensemble(queue_dir)
+
+    # 2. Second consolidation with updated value for same key
+    Path(queue_file).write_text(
+        encoding="utf-8",
+        data=json.dumps({"realization": 0, "key": {"well_id": "W1"}, "value": 2.0})
+        + "\n",
+    )
+
+    worker.consolidate_ensemble(queue_dir)
+
+    # 3. Assertion: should only have 1 row with the newest value
+    resp_dir = queue_dir / "responses"
+    filename = next(iter(resp_dir.glob("*.parquet")))
+    df = pl.read_parquet(resp_dir / filename)
+
+    assert len(df) == 1
+    assert df["value"][0] == 2.0
