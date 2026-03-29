@@ -86,12 +86,37 @@ GERT operates as a distributed system composed of specific, decoupled services:
 ## 6. Failure Handling & State Management
 * **Failures & Manual Restarts:** HPC Schedulers will not automatically restart failed jobs. GERT does not attempt complex mid-step resumption. Users manually trigger a restart of failed realizations via the API. The server looks up the exact parameter values in the immutable config and reboots the forward model from scratch.
 
-## 7. Algorithms & Math
-* External Math Libraries: Update algorithms rely strictly on external mathematical libraries (e.g., iterative_ensemble_smoother for ES/IES/ES-MDA, and graphite maps for EnIF).
-* The Update Step: The algorithm consumes the fully consolidated Parquet datasets (responses and current parameters) from the storage layer and calculates a new Parameter Set for the next iteration.
-* State vs. Configuration: This new Parameter Set is not appended to the experiment config. The experiment config remains an immutable record of only the first (prior) parameter set. Instead, the updated Parameter Set is pushed to the Storage Server as part of the new iteration's dataset, where the Experiment Runner will fetch it to execute the next round of forward models.
+## 7. The Macro Iteration Loop (Orchestration)
+To run an experiment, GERT executes a rigid state machine based on the declarative `updates` array in the `ExperimentConfig`. An experiment with $N$ scheduled updates will execute the Forward Model exactly $N + 1$ times. The final iteration is the **Posterior Evaluation** run.
 
-## 8. Everest Integration (Ensemble-Based Optimization)
+### The Loop Lifecycle:
+1. **Iteration 0 (The Prior):**
+    * Parameter source: The immutable `ExperimentConfig.parameter_matrix`.
+    * Execute all realization forward models.
+    * **The Flush:** Wait for the Storage API to drain the ingestion queue and consolidate response schemas.
+    * Mathematical Update: Invoke the math plugin defined in `updates[0]`.
+    * State Transition: Save the calculated posterior as the starting parameter set for `iter-1` in the Storage Server.
+2. **Iteration $k$ (The Update Loop):**
+    * Parameter source: Fetch the parameter set for `iter-k` from storage.
+    * Execute all realization forward models.
+    * The Flush: Wait for consolidation.
+    * Mathematical Update: Invoke math plugin `updates[k]`. Save result as starting parameter set for `iter-(k+1)`.
+3. **Iteration $N$ (The Posterior Evaluation):**
+    * Parameter source: Fetch the final updated parameter set from `iter-N`.
+    * Execute the final forward model runs.
+    * The Flush: Wait for consolidation.
+    * **Termination:** Because `updates[N]` does not exist, the experiment concludes.
+
+* **Empty Update Schedule:** If the `updates` array is empty, GERT defaults to a single "Prior Evaluation" run (Iteration 0) and terminates.
+* **Algorithm-Specific State:** GERT does not persist intermediate mathematical state between iterations. Every update is a stateless function of the current parameters, consolidated simulated responses, and observations.
+
+## 8. Localization & Spatial Logic
+By partitioning storage into strict schemas based on primary keys (e.g., `[x, y, z]` or `[i, j, k]`), GERT allows math algorithms to perform **Distance-Based Localization** without hardcoded domain knowledge.
+*   **Coordinate Aware Observations:** `Observation` models may optionally include physical coordinates.
+*   **Automatic Distance Matrices:** Math plugins can extract these coordinates from both the `observations` and `parameters` DataFrames (mapped via `schemas.json`) to calculate distance matrices (e.g., via `scipy.spatial.distance.cdist`) for tapering Kalman gains.
+*   **Topology Inference:** GERT automatically generates `networkx` graphs for spatial fields based purely on the integer adjacency of `[i, j, k]` or distance-based neighbors for `[x, y, z]`.
+
+## 9. Everest Integration (Ensemble-Based Optimization)
 * Everest is treated strictly as a generic, domain-agnostic **ensemble-based optimization layer** sitting on top of GERT.
 * Everest handles optimization concepts (objective functions, constraints). It generates a deterministic set of control variables, formats them as a standard GERT Parameter Set matrix, and `POST`s them to the GERT API for blind execution.
 
