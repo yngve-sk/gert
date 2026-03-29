@@ -5,6 +5,8 @@ from typing import Any
 
 import pluggy
 
+from gert.updates.base import UpdateAlgorithm
+
 
 class ForwardModelPlugin(ABC):
     """Abstract base class for GERT forward model step plugins.
@@ -88,6 +90,11 @@ class GertPluginSpecs:
         """Discovers and returns a list of installed lifecycle hook plugins."""
         return []
 
+    @pluggy.HookspecMarker("gert")
+    def gert_update_algorithms(self) -> list[UpdateAlgorithm]:
+        """Discover and load external update algorithm plugins."""
+        return []
+
 
 # 3. Create the Plugin Manager Factory
 def get_plugin_manager() -> pluggy.PluginManager:
@@ -114,6 +121,7 @@ class GertRuntimePlugins:
         self._pm = get_plugin_manager()
         self.forward_model_steps = self._get_forward_model_steps_from_plugin_manager()
         self.lifecycle_hooks = self._get_lifecycle_hooks_from_plugin_manager()
+        self.update_algorithms = self._get_update_algorithms_from_plugin_manager()
 
     def _get_forward_model_steps_from_plugin_manager(self) -> list[ForwardModelPlugin]:
         """Wraps the pluggy hook call and flattens the results into a single list."""
@@ -123,4 +131,9 @@ class GertRuntimePlugins:
     def _get_lifecycle_hooks_from_plugin_manager(self) -> list[LifecycleHookPlugin]:
         """Wraps the pluggy hook call and flattens the results into a single list."""
         raw_results = self._pm.hook.gert_lifecycle_hooks() or []
+        return [item for sublist in raw_results for item in sublist]
+
+    def _get_update_algorithms_from_plugin_manager(self) -> list[UpdateAlgorithm]:
+        """Wraps the pluggy hook call and flattens the results into a single list."""
+        raw_results = self._pm.hook.gert_update_algorithms() or []
         return [item for sublist in raw_results for item in sublist]
