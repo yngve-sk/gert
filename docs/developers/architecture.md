@@ -61,19 +61,62 @@ GERT operates as a distributed system composed of specific, decoupled services:
 ## 5. Data Ingestion & Storage (Incremental & Persistent)
 * **Long-Running Service:** Permanent "dark storage" relies on the Storage Server, booted at experiment start and kept active throughout the lifecycle.
 * **Sparse, Real-Time Ingestion (Push, Not Poll):** Forward models emit "sparse" data via HTTP/gRPC as it is generated (or via post-run parsing scripts). To ensure high throughput without locking, the ingestion service writes incoming payloads to a fast, append-only `.jsonl` message queue.
-* **Incremental Consolidation (Polars):** A background process continuously reads the `.jsonl` queue and uses `polars` to parse, aggregate, and perform joins/upserts to consolidate the sparse updates into permanent storage.
-* **Storage Format (Parquet):** Permanent storage consists of columnar `.parquet` files, organized per response schema (**one row per realization**, **one column per response key**).
+* **Incremental Consolidation & Schema Routing (Polars):** A background worker continuously reads the append-only `.jsonl` queue, parses the sparse JSON payloads using `polars`, and performs a critical **Schema Routing** operation.
+    *   Instead of blindly appending to a single table, the consolidator analyzes the keys of each JSON payload. It groups the incoming data into distinct dataframes based exclusively on their schema (i.e., their distinct set of coordinate/primary keys).
+    *   These distinct dataframes are then upserted/joined into their corresponding partitioned tables.
+* **Storage Format (Parquet):** Permanent storage consists of columnar `.parquet` files strictly partitioned by schema. To remain highly efficient and conceptually clean, data is stored using the **"One Table per Schema"** principle.
+    *   Tables are strictly segregated into `parameters/` or `responses/` subdirectories for the current iteration.
+    *   **The Schema Registry (`schemas.json`):** While Parquet files store column names and data types, they cannot natively distinguish between a *coordinate index* (e.g., `time`, `x`, `y`) and a *simulated value* (e.g., `porosity`, `FOPR`). To solve this without relying on fragile naming conventions, the Consolidator maintains a living `schemas.json` manifest in both the `parameters/` and `responses/` directories.
+    *   **Self-Describing Storage:** Every time a new schema is detected in the `.jsonl` stream, the consolidator generates a new `.parquet` table and registers it. This file maps the physical Parquet file to its defining primary keys (e.g., `{"grid3d.parquet": {"primary_keys": ["i", "j", "k"]}, "wells.parquet": {"primary_keys": ["well_id", "time"]}}`).
+    *   **Scalars:** Stored in a simple table like `parameters/scalar.parquet` (e.g., `[realization, fault_mult, skin_factor]`). All columns other than `realization` are assumed to be raw values.
+    *   **2D/3D Fields:** Stored in dimension-specific tables like `parameters/grid3d.parquet` using the coordinate columns to guarantee deterministic spatial sorting alongside the realization (e.g., `[realization, i, j, k, porosity, permeability]`).
+    *   **Responses:** Similarly partitioned based on the forward model's output schema (e.g., transient well logs in `responses/data_a1b2c3d4.parquet` with `[realization, well_id, time, FOPR]`). The table name is a deterministic hash of the primary keys.
+    *   This folder structure guarantees optimal Parquet columnar compression, prevents redundant string duplication, and provides a perfectly human-readable manifest of the entire iteration's data topology.
+* **Data Retrieval & Alignment (Schema on Disk, Dense Matrix in Memory):** While data is partitioned logically on disk, mathematical update algorithms fundamentally expect a single, dense state vector ($N_{reals} \times N_{features}$). The `StorageQueryAPI` is strictly responsible for bridging this gap. It reads the disparate schema tables, structurally unrolls spatial fields into flat vectors (sorting deterministically by spatial primary keys like `i,j,k`), and horizontally concatenates everything into the final, dense Wide DataFrame expected by the update algorithm. This guarantees that plugin developers receive aligned, math-ready matrices and are shielded from writing complex, error-prone data-wrangling boilerplate.
+* **The Observation-to-Response Mapping Contract:** In GERT, simulated responses exist entirely independently of observations. A forward model might output 10,000 transient pressure points for a well, while an experiment only possesses 3 physical RFT measurements to assimilate.
+    *   To resolve this, observations are defined using **Composite Keys** (e.g., `{"well_id": "A", "time": "2020-01-01", "response": "FOPR"}`).
+    *   The `StorageQueryAPI` retrieves the raw, schema-partitioned response files and passes them vertically concatenated (Tidy) to the math plugin.
+    *   **The Update Algorithm** (e.g., EnIF, ES-MDA) is strictly responsible for using these composite keys as multi-column filters to execute an Inner Join against the vast universe of simulated responses. It plucks out only the specific simulated values that mathematically align with an observation and pivots them. By handling this directly inside the Math Plugin, algorithms retain full access to spatial coordinate keys for crucial data assimilation tasks like distance-based localization, outlier data-muting, and intelligent handling of ensemble collapse.
+* **Domain-Agnostic Topology Inference:** Because parameters are grouped strictly by their primary key schemas, GERT can automatically infer the spatial relationships (the mathematical graph) of any parameter field without relying on hardcoded, domain-specific types (e.g., ERT's `FIELD` vs. `SURFACE` types).
+    *   **Lattice/Grid Schema:** If a table uses continuous integer keys like `[i, j, k]`, GERT assumes it is a structured Cartesian grid and can automatically generate a standard 3D Lattice Graph linking adjacent indices.
+    *   **Point Cloud Schema:** If a table uses continuous float keys like `[x, y, z]`, GERT can auto-generate distance-based connections (e.g., K-Nearest Neighbors).
+    *   **The Escape Hatch:** The core assumption of auto-generation is that *logical adjacency equals physical adjacency*. In geosciences, this is often false due to geological faults, dead cells (pinch-outs), or highly distorted corner-point grids. When a simple grid assumption fails, users can override the auto-generation by passing a custom topology (e.g., `custom_topology_file`) directly via the `algorithm_arguments` in the update schedule.
 * **Live Inspectability & The Flush:** Because consolidation happens incrementally, users can query partial data during runtime. At the end of an iteration, a callback guarantees the queue is drained and Parquet files are fully up-to-date (flushed) before the mathematical update.
 
 ## 6. Failure Handling & State Management
 * **Failures & Manual Restarts:** HPC Schedulers will not automatically restart failed jobs. GERT does not attempt complex mid-step resumption. Users manually trigger a restart of failed realizations via the API. The server looks up the exact parameter values in the immutable config and reboots the forward model from scratch.
 
-## 7. Algorithms & Math
-* External Math Libraries: Update algorithms rely strictly on external mathematical libraries (e.g., iterative_ensemble_smoother for ES/IES/ES-MDA, and graphite maps for EnIF).
-* The Update Step: The algorithm consumes the fully consolidated Parquet datasets (responses and current parameters) from the storage layer and calculates a new Parameter Set for the next iteration.
-* State vs. Configuration: This new Parameter Set is not appended to the experiment config. The experiment config remains an immutable record of only the first (prior) parameter set. Instead, the updated Parameter Set is pushed to the Storage Server as part of the new iteration's dataset, where the Experiment Runner will fetch it to execute the next round of forward models.
+## 7. The Macro Iteration Loop (Orchestration)
+To run an experiment, GERT executes a rigid state machine based on the declarative `updates` array in the `ExperimentConfig`. An experiment with $N$ scheduled updates will execute the Forward Model exactly $N + 1$ times. The final iteration is the **Posterior Evaluation** run.
 
-## 8. Everest Integration (Ensemble-Based Optimization)
+### The Loop Lifecycle:
+1. **Iteration 0 (The Prior):**
+    * Parameter source: The immutable `ExperimentConfig.parameter_matrix`.
+    * Execute all realization forward models.
+    * **The Flush:** Wait for the Storage API to drain the ingestion queue and consolidate response schemas.
+    * Mathematical Update: Invoke the math plugin defined in `updates[0]`.
+    * State Transition: Save the calculated posterior as the starting parameter set for `iter-1` in the Storage Server.
+2. **Iteration $k$ (The Update Loop):**
+    * Parameter source: Fetch the parameter set for `iter-k` from storage.
+    * Execute all realization forward models.
+    * The Flush: Wait for consolidation.
+    * Mathematical Update: Invoke math plugin `updates[k]`. Save result as starting parameter set for `iter-(k+1)`.
+3. **Iteration $N$ (The Posterior Evaluation):**
+    * Parameter source: Fetch the final updated parameter set from `iter-N`.
+    * Execute the final forward model runs.
+    * The Flush: Wait for consolidation.
+    * **Termination:** Because `updates[N]` does not exist, the experiment concludes.
+
+* **Empty Update Schedule:** If the `updates` array is empty, GERT defaults to a single "Prior Evaluation" run (Iteration 0) and terminates.
+* **Algorithm-Specific State:** GERT does not persist intermediate mathematical state between iterations. Every update is a stateless function of the current parameters, consolidated simulated responses, and observations.
+
+## 8. Localization & Spatial Logic
+By partitioning storage into strict schemas based on primary keys (e.g., `[x, y, z]` or `[i, j, k]`), GERT allows math algorithms to perform **Distance-Based Localization** without hardcoded domain knowledge.
+*   **Coordinate Aware Observations:** `Observation` models may optionally include physical coordinates.
+*   **Automatic Distance Matrices:** Math plugins can extract these coordinates from both the `observations` and `parameters` DataFrames (mapped via `schemas.json`) to calculate distance matrices (e.g., via `scipy.spatial.distance.cdist`) for tapering Kalman gains.
+*   **Topology Inference:** GERT automatically generates `networkx` graphs for spatial fields based purely on the integer adjacency of `[i, j, k]` or distance-based neighbors for `[x, y, z]`.
+
+## 9. Everest Integration (Ensemble-Based Optimization)
 * Everest is treated strictly as a generic, domain-agnostic **ensemble-based optimization layer** sitting on top of GERT.
 * Everest handles optimization concepts (objective functions, constraints). It generates a deterministic set of control variables, formats them as a standard GERT Parameter Set matrix, and `POST`s them to the GERT API for blind execution.
 

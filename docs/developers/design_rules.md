@@ -45,3 +45,7 @@ This document outlines the core architectural constraints and design rules that 
 ### Rule 11: Fail Fast and Strict Input Validation
 * **Statement:** The system must reject invalid inputs immediately and loudly at the outermost boundary. It must never silently sanitize, guess, or attempt to gracefully recover from malformed data.
 * **Explanation:** If an API payload, observation set, or parameter matrix is incomplete, malformed, or mathematically invalid, GERT must raise a strict, terminal error immediately (typically via Pydantic validation). Do not let bad state propagate deeper into the execution or mathematical layers before failing.
+
+### Rule 12: Dependency Injection via Immutable Configs
+* **Statement:** Core orchestration classes (e.g., `ExperimentOrchestrator`) should prefer receiving an immutable base truth (like `ExperimentConfig`) in their `__init__` rather than accepting pre-instantiated, large dependency objects (like `StorageAPI` or `JobSubmitter`).
+* **Explanation:** Passing the immutable configuration as the single source of truth allows the orchestrator to internally instantiate and manage its own dependencies (Storage, Workdir Managers, Job Submitters) based on the config. This reduces brittle boilerplate in the routing/API layers and guarantees that all internal services are perfectly synchronized with the exact same configuration state.

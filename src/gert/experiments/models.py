@@ -74,6 +74,7 @@ class Observation(BaseModel):
     key: dict[str, str]
     value: float
     std_dev: PositiveFloat
+    coordinates: dict[str, float] | None = None
 
 
 class HookEvent(str, Enum):
@@ -170,6 +171,17 @@ class Template(BaseModel):
         return self
 
 
+class UpdateStep(BaseModel):
+    """Configuration for a single mathematical update step."""
+
+    name: str
+    algorithm: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    # The specific parameters to update in this step.
+    # If empty, all updatable parameters from the matrix are used.
+    updatable_parameters: list[str] = Field(default_factory=list)
+
+
 class ExperimentConfig(BaseModel):
     """Immutable root configuration for a GERT experiment."""
 
@@ -189,6 +201,7 @@ class ExperimentConfig(BaseModel):
     templates: list[Template] = Field(default_factory=list)
     forward_model_steps: list[ExecutableForwardModelStep | PluginForwardModelStep]
     lifecycle_hooks: list[ExecutableHook | PluginHook] = Field(default_factory=list)
+    updates: list[UpdateStep] = Field(default_factory=list)
     queue_config: QueueConfig
     parameter_matrix: ParameterMatrix
     observations: list[Observation]
