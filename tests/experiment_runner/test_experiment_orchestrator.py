@@ -87,7 +87,7 @@ class TestExperimentOrchestrator:
     ) -> None:
         """run_realization raises RuntimeError if experiment has not been started."""
         with pytest.raises(RuntimeError, match="Experiment not started"):
-            orchestrator.run_realization(0, 0)
+            orchestrator.evaluate_forward_model(0, 0)
 
     def test_run_iteration_rejects_negative_iteration(
         self,
@@ -123,7 +123,7 @@ class TestExperimentOrchestrator:
         orchestrator._config = config
         orchestrator.start_experiment()
         with pytest.raises(ValueError, match="Realization number must be >= 0"):
-            orchestrator.run_realization(-1, 0)
+            orchestrator.evaluate_forward_model(-1, 0)
 
     def test_run_realization_rejects_negative_iteration(
         self,
@@ -141,7 +141,7 @@ class TestExperimentOrchestrator:
         orchestrator._config = config
         orchestrator.start_experiment()
         with pytest.raises(ValueError, match="Iteration number must be >= 0"):
-            orchestrator.run_realization(0, -1)
+            orchestrator.evaluate_forward_model(0, -1)
 
     async def test_run_iteration_determines_unique_realizations_and_executes(
         self,
@@ -212,7 +212,7 @@ class TestExperimentOrchestrator:
         orchestrator = ExperimentOrchestrator(config=config)
         exp_id = orchestrator.start_experiment()
 
-        orchestrator.run_realization(
+        orchestrator.evaluate_forward_model(
             realization_id=42,
             iteration=3,
         )

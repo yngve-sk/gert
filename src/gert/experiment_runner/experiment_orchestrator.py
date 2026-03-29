@@ -138,10 +138,10 @@ class ExperimentOrchestrator:
         self._iteration_events[iteration] = asyncio.Event()
 
         for r_id in sorted(realizations):
-            job_id = self.run_realization(r_id, iteration)
+            job_id = self.evaluate_forward_model(r_id, iteration)
             self._active_jobs[iteration][r_id] = job_id
 
-    def run_realization(self, realization_id: int, iteration: int) -> str:  # noqa: C901
+    def evaluate_forward_model(self, realization_id: int, iteration: int) -> str:  # noqa: C901
         """Submit the forward model for a single realization.
 
         Args:
