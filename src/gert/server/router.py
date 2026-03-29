@@ -15,12 +15,10 @@ from fastapi import Path as FastApiPath
 from pydantic import BaseModel, Field
 
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
-from gert.experiment_runner.job_submitter import JobSubmitter
-from gert.experiment_runner.realization_workdir_manager import RealizationWorkdirManager
 from gert.experiments.models import ExperimentConfig, IngestionPayload
+from gert.storage.api import StorageAPI
 from gert.storage.consolidation import ConsolidationWorker
 from gert.storage.ingestion import IngestionReceiver
-from gert.storage.query import StorageQueryAPI
 
 router = APIRouter(tags=["experiments"])
 
@@ -110,12 +108,6 @@ async def start_experiment(
 
     config = _experiment_configs[experiment_id]
     # Dependency injection here for orchestrator logic
-    job_submitter = JobSubmitter(
-        queue_config=config.queue_config.custom_attributes,
-        executor_type=config.queue_config.backend,
-    )
-    workdir_manager = RealizationWorkdirManager(config.realization_workdirs_base)
-
     execution_id_ref = {"id": ""}
 
     def _monitoring_cb(
@@ -136,14 +128,12 @@ async def start_experiment(
             )
 
     orchestrator = ExperimentOrchestrator(
-        job_submitter,
-        workdir_manager,
+        config=config,
         monitoring_callback=_monitoring_cb,
     )
 
     _experiment_run_counts[experiment_id] += 1
     execution_id = orchestrator.start_experiment(
-        config,
         run_count=_experiment_run_counts[experiment_id],
     )
     execution_id_ref["id"] = execution_id
@@ -253,9 +243,9 @@ def get_consolidation_worker(
 
 def get_query_api(
     config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
-) -> StorageQueryAPI:
-    """Dependency provider for StorageQueryAPI."""
-    return StorageQueryAPI(config.storage_base)
+) -> StorageAPI:
+    """Dependency provider for StorageAPI."""
+    return StorageAPI(config.storage_base)
 
 
 @router.post(
@@ -285,7 +275,7 @@ async def get_responses(
     execution_id: Annotated[str, FastApiPath(alias="id")],
     iteration: int,
     config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
-    query_api: Annotated[StorageQueryAPI, Depends(get_query_api)],
+    query_api: Annotated[StorageAPI, Depends(get_query_api)],
 ) -> list[dict[str, Any]]:
     """Retrieve consolidated responses.
 

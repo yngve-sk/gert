@@ -7,7 +7,7 @@ import polars as pl
 from gert.storage.consolidation import ConsolidationWorker
 
 
-class StorageQueryAPI:
+class StorageAPI:
     """Provides methods to query consolidated experiment data."""
 
     def __init__(self, base_storage_path: Path) -> None:

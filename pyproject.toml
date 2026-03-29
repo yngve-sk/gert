@@ -115,6 +115,8 @@ allowed-confusables = ["–"]
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/*" = [
+    "ASYNC110", # It's perfectly fine to await asyncio.sleep in tests
+    "E501",    # Long test lines are fine
     "S101",    # Use of assert detected (allowed in tests)
     "D",       # All pydocstyle rules (docstring conventions - tests often don't need extensive docs)
     "TC003",   # Move standard library import into a type-checking block

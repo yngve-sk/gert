@@ -6,7 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from gert.storage.query import StorageQueryAPI
+from gert.storage.api import StorageAPI
 
 
 @pytest.fixture
@@ -16,13 +16,13 @@ def storage_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def api(storage_path: Path) -> StorageQueryAPI:
-    """Provide a StorageQueryAPI instance."""
-    return StorageQueryAPI(storage_path)
+def api(storage_path: Path) -> StorageAPI:
+    """Provide a StorageAPI instance."""
+    return StorageAPI(storage_path)
 
 
 def test_get_responses_diagonal_concatenation(
-    api: StorageQueryAPI,
+    api: StorageAPI,
     storage_path: Path,
 ) -> None:
     """Prove that get_responses collects disparate schema tables and diagonally
@@ -79,7 +79,7 @@ def test_get_responses_diagonal_concatenation(
 
 
 def test_get_parameters_unrolls_spatial_schemas(
-    api: StorageQueryAPI,
+    api: StorageAPI,
     storage_path: Path,
 ) -> None:
     """Prove that get_parameters groups spatial coordinates into perfectly
@@ -136,7 +136,7 @@ def test_get_parameters_unrolls_spatial_schemas(
 
 
 def test_write_parameters_uses_spatial_templates(
-    api: StorageQueryAPI,
+    api: StorageAPI,
     storage_path: Path,
 ) -> None:
     """Prove that write_parameters uses the prior parquet files as templates to explode
@@ -185,7 +185,7 @@ def test_write_parameters_uses_spatial_templates(
 
 
 def test_get_responses_missing_files_raises_error(
-    api: StorageQueryAPI,
+    api: StorageAPI,
     storage_path: Path,
 ) -> None:
     """If no response files exist for the iteration, it should raise a clear error."""
@@ -194,7 +194,7 @@ def test_get_responses_missing_files_raises_error(
 
 
 def test_get_parameters_missing_files_raises_error(
-    api: StorageQueryAPI,
+    api: StorageAPI,
     storage_path: Path,
 ) -> None:
     """If no parameter files exist for the iteration, it should raise a clear error."""

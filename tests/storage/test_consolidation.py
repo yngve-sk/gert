@@ -62,7 +62,7 @@ def test_consolidate_upsert_logic(
     worker: ConsolidationWorker,
     storage_path: Path,
 ) -> None:
-    """Prove that the worker correctly upserts (updates) existing data with newer records."""  # noqa: E501
+    """Prove that the worker correctly upserts (updates) existing data with newer records."""
     queue_dir = storage_path / "test_upsert" / "run_1" / "iter-0"
     queue_dir.mkdir(parents=True)
     queue_file = queue_dir / "ingestion_queue.jsonl"
