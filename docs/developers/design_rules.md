@@ -53,3 +53,7 @@ This document outlines the core architectural constraints and design rules that 
 ### Rule 13: Constructor Completeness (No Two-Phase Initialization)
 * **Statement:** Objects must be fully initialized, valid, and ready for use immediately upon instantiation.
 * **Explanation:** Avoid "two-phase" initialization methods (like `start_experiment()`). If an attribute (e.g., `execution_id`, `storage_api`) is required for an object's methods to function, it must be assigned or generated in `__init__`. This eliminates the anti-pattern of scattering defensive `if self.attr is None:` checks throughout downstream business logic.
+
+### Rule 14: Separation of Data and Control
+* Core data models must not contain control logic or environment-specific validation.
+* Data models, such as ExperimentConfig, should represent the data and its constraints. Any logic that interacts with the execution environment, such as validating file paths or permissions, belongs in the control layer (e.g., the ). This separation ensures that the data models remain portable and that the backend can be modified without affecting the core data structures.
