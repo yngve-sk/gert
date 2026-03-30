@@ -4,7 +4,6 @@
 import json
 import time
 import urllib.request
-import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.error import URLError
@@ -64,6 +63,14 @@ class NavigationTree(Tree[int]):
 class GertMonitorApp(App[None]):
     """Textual application for GERT experiment monitoring."""
 
+    api_url: str
+    experiment_id: str
+    execution_id: str
+    expected_count: int | None
+    iteration: int
+    status_url: str
+    responses_url: str | None
+
     CSS = """
     Screen {
         layout: vertical;
@@ -120,21 +127,33 @@ class GertMonitorApp(App[None]):
         self,
         api_url: str,
         experiment_id: str,
+        execution_id: str | None = None,
         expected_count: int | None = None,
-        ensemble_id: str | None = None,
+        iteration: int = 0,
     ) -> None:
         super().__init__()
         self.api_url = api_url
         self.experiment_id = experiment_id
+        exec_id: str = execution_id or ""
+        self.execution_id = exec_id
         self.expected_count = expected_count
-        self.status_url = f"{api_url}/experiments/{experiment_id}/status"
+        self.iteration = iteration
 
-        if ensemble_id is None:
-            ensemble_id = uuid.uuid5(uuid.UUID(experiment_id), "0").hex
+        if self.execution_id:
+            self.status_url = (
+                f"{api_url}/experiments/{experiment_id}"
+                f"/executions/{self.execution_id}/status"
+            )
+            self.responses_url = (
+                f"{api_url}/experiments/{experiment_id}/executions/{self.execution_id}"
+                f"/ensembles/{iteration}/responses"
+            )
+        else:
+            self.status_url = f"{api_url}/experiments/{experiment_id}/status"
+            # If execution_id is unknown, we can't easily poll responses yet
+            # unless we get it from the status first. For now, keep it simple.
+            self.responses_url = None
 
-        self.responses_url = (
-            f"{api_url}/storage/{experiment_id}/ensembles/{ensemble_id}/responses"
-        )
         self._statuses: dict[int, dict[str, Any]] = {}
         self._responses: dict[int, list[dict[str, Any]]] = defaultdict(list)
         self._iteration_nodes: dict[int, TreeNode[int]] = {}
@@ -150,7 +169,11 @@ class GertMonitorApp(App[None]):
             yield ProgressView(id="progress-container")
 
         with Horizontal(id="bottom-pane"):
-            yield NavigationTree(f"Experiment {self.experiment_id}", id="tree-view")
+            yield NavigationTree(
+                f"Experiment {self.experiment_id} "
+                f"({'Latest' if not self.execution_id else self.execution_id})",
+                id="tree-view",
+            )
             yield ResponseViewer(
                 "Select a realization to view its last response.",
                 id="response-view",
@@ -174,42 +197,47 @@ class GertMonitorApp(App[None]):
         """Cleanup any remaining threads on unmount."""
         self._exiting = True
 
+    def _check_if_all_realizations_are_done(self) -> bool:
+        """Poll the status API. Returns True if all expected realizations are done."""
+        try:
+            req = urllib.request.Request(self.status_url)  # noqa: S310
+            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
+                if response.getcode() == 200:
+                    data = json.loads(response.read().decode("utf-8"))
+                    self.call_from_thread(self.process_data, data)
+
+                    if (
+                        self.expected_count is not None
+                        and len(self._statuses) >= self.expected_count
+                        and all(
+                            s["status"] in {"COMPLETED", "FAILED"}
+                            for s in self._statuses.values()
+                        )
+                    ):
+                        return True
+        except (URLError, Exception):  # noqa: S110
+            pass
+        return False
+
+    def _poll_responses(self) -> None:
+        """Poll the responses API."""
+        if not self.responses_url:
+            return
+        try:
+            req = urllib.request.Request(self.responses_url)  # noqa: S310
+            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
+                if response.getcode() == 200:
+                    data = json.loads(response.read().decode("utf-8"))
+                    self.call_from_thread(self.process_responses, data)
+        except (URLError, Exception):  # noqa: S110
+            pass
+
     @work(exclusive=True, thread=True)
     def poll_api(self) -> None:
         """Poll the API for status updates in a background thread."""
         while not self._exiting:
-            should_exit = False
-            try:
-                req = urllib.request.Request(self.status_url)  # noqa: S310
-                with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
-                    if response.getcode() == 200:
-                        data = json.loads(response.read().decode("utf-8"))
-                        self.call_from_thread(self.process_data, data)
-
-                        if (
-                            self.expected_count is not None
-                            and len(self._statuses) >= self.expected_count
-                            and all(
-                                s["status"] in {"COMPLETED", "FAILED"}
-                                for s in self._statuses.values()
-                            )
-                        ):
-                            should_exit = True
-            except URLError:
-                pass
-            except Exception:  # noqa: S110
-                pass
-
-            try:
-                req2 = urllib.request.Request(self.responses_url)  # noqa: S310
-                with urllib.request.urlopen(req2, timeout=5) as response2:  # noqa: S310
-                    if response2.getcode() == 200:
-                        data2 = json.loads(response2.read().decode("utf-8"))
-                        self.call_from_thread(self.process_responses, data2)
-            except URLError:
-                pass
-            except Exception:  # noqa: S110
-                pass
+            should_exit = self._check_if_all_realizations_are_done()
+            self._poll_responses()
 
             if should_exit:
                 time.sleep(1)
@@ -353,9 +381,16 @@ class GertMonitorApp(App[None]):
 def start_monitor(
     api_url: str,
     experiment_id: str,
+    execution_id: str | None = None,
     expected_count: int | None = None,
-    ensemble_id: str | None = None,
+    iteration: int = 0,
 ) -> None:
     """Entry point for the monitor CLI command."""
-    app = GertMonitorApp(api_url, experiment_id, expected_count, ensemble_id)
+    app = GertMonitorApp(
+        api_url,
+        experiment_id,
+        execution_id,
+        expected_count,
+        iteration,
+    )
     app.run()

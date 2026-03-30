@@ -13,6 +13,7 @@ from gert.experiments.models import (
 )
 from gert.plugins.plugins import GertRuntimePlugins
 from gert.storage.api import StorageAPI
+from gert.storage.consolidation import ConsolidationWorker
 
 from .job_submitter import JobSubmitter
 from .realization_workdir_manager import RealizationWorkdirManager
@@ -28,16 +29,25 @@ class ExperimentOrchestrator:
     def __init__(
         self,
         config: ExperimentConfig,
+        experiment_id: str,
+        run_count: int = 1,
         monitoring_callback: Callable[[int, int, str], None] | None = None,
     ) -> None:
         """Initialize the orchestrator using an immutable config as the base truth.
 
         Args:
             config: The strictly immutable experiment configuration.
+            experiment_id: The unique UUID for the experiment configuration.
+            run_count: The sequential run count for this experiment (defaults to 1).
             monitoring_callback: Optional callback to notify about job status changes.
         """
         self._config = config
+        self._experiment_id = experiment_id
         self._monitoring_callback = monitoring_callback
+
+        # Constructor Completeness: Generate execution ID immediately
+        exp_uuid = uuid.uuid4().hex
+        self._execution_id = f"run_{run_count}-{exp_uuid}"
 
         # Instantiate internal dependencies based directly on the base truth config
         self._job_submitter = JobSubmitter(
@@ -49,7 +59,6 @@ class ExperimentOrchestrator:
         )
         self._storage_api = StorageAPI(base_storage_path=config.storage_base)
 
-        self._execution_id: str | None = None
         self._plugins = GertRuntimePlugins()
 
         # Track active jobs per iteration: {iteration: {realization_id: job_id}}
@@ -59,39 +68,56 @@ class ExperimentOrchestrator:
         # Completion event per iteration
         self._iteration_events: dict[int, asyncio.Event] = {}
 
-    def start_experiment(
-        self,
-        run_count: int = 1,
-    ) -> str:
-        """Start a new experiment execution.
-
-        Args:
-            run_count: The sequential run count for this experiment.
-
-        Returns:
-            The execution ID for tracking status.
-        """
-        exp_uuid = uuid.uuid4().hex
-        self._execution_id = f"run_{run_count}-{exp_uuid}"
+    @property
+    def execution_id(self) -> str:
+        """Get the universally unique execution ID for this orchestrator instance."""
         return self._execution_id
 
     async def run_experiment(self) -> None:
         """Execute the full macro iteration loop (N+1 iterations)."""
-        exec_id = self.start_experiment()
         num_updates = len(self._config.updates)
 
         # Iteration 0 uses prior from config
         current_parameters = self._config.parameter_matrix
 
+        # Track consolidation background tasks
+        consolidation_tasks: set[asyncio.Task[Any]] = set()
+
         for i in range(num_updates + 1):
+            # 0. Start the consolidation background worker for this iteration
+            if self._storage_api:
+                worker = ConsolidationWorker(self._config.storage_base)
+                queue_path = (
+                    self._config.storage_base
+                    / self._config.name
+                    / self._execution_id
+                    / f"iter-{i}"
+                    / "ingestion_queue.jsonl"
+                )
+                watch_task = asyncio.create_task(
+                    worker.start_watching(
+                        queue_path,
+                        self._config.consolidation_interval,
+                    ),
+                )
+                consolidation_tasks.add(watch_task)
+                watch_task.add_done_callback(consolidation_tasks.discard)
+
             # 1. Run Forward Models for this iteration
             self.run_iteration(i, current_parameters)
 
             # 2. Wait for all realizations in this iteration to finish
             await self._wait_for_iteration(i)
 
-            # 3. Flush storage to ensure all responses are consolidated
-            self._storage_api.flush(self._config.name, exec_id, i)
+            # 3. Flush storage and cancel the watching task for this iteration
+            if self._storage_api:
+                if watch_task in consolidation_tasks:
+                    watch_task.cancel()
+                self._storage_api.flush(
+                    experiment_id=self._config.name,
+                    execution_id=self._execution_id,
+                    iteration=i,
+                )
 
             # 4. Perform Update (if not the last iteration)
             if i < num_updates:
@@ -100,10 +126,10 @@ class ExperimentOrchestrator:
 
                 # Write posterior parameters to storage for the NEXT iteration
                 self._storage_api.write_parameters(
-                    self._config.name,
-                    exec_id,
-                    i + 1,
-                    updated_params_df,
+                    experiment_id=self._config.name,
+                    execution_id=self._execution_id,
+                    iteration=i + 1,
+                    parameters=updated_params_df,
                 )
 
                 # Prepare for next iteration's injection
@@ -137,11 +163,16 @@ class ExperimentOrchestrator:
         self._completed_realizations[iteration] = set()
         self._iteration_events[iteration] = asyncio.Event()
 
+        # Initialize all known realizations as PENDING via the callback
+        if self._monitoring_callback:
+            for r_id in sorted(realizations):
+                self._monitoring_callback(r_id, iteration, "PENDING")
+
         for r_id in sorted(realizations):
             job_id = self.evaluate_forward_model(r_id, iteration)
             self._active_jobs[iteration][r_id] = job_id
 
-    def evaluate_forward_model(self, realization_id: int, iteration: int) -> str:  # noqa: C901
+    def evaluate_forward_model(self, realization_id: int, iteration: int) -> str:
         """Submit the forward model for a single realization.
 
         Args:
@@ -152,13 +183,8 @@ class ExperimentOrchestrator:
             The job ID from the job submitter.
 
         Raises:
-            RuntimeError: If the experiment has not been started.
             ValueError: If the realization_id or iteration is negative.
         """
-        if self._execution_id is None:
-            msg = "Experiment not started."
-            raise RuntimeError(msg)
-
         if realization_id < 0:
             msg = f"Realization number must be >= 0, got: {realization_id}"
             raise ValueError(msg)
@@ -168,7 +194,7 @@ class ExperimentOrchestrator:
             raise ValueError(msg)
 
         workdir = self._workdir_manager.create_workdir(
-            experiment_name=self._config.name,
+            experiment_id=self._config.name,
             execution_id=self._execution_id,
             iteration=iteration,
             realization=realization_id,
@@ -181,7 +207,8 @@ class ExperimentOrchestrator:
                 cmd_parts = [step.executable]
                 for arg in step.args:
                     replaced = (
-                        arg.replace("{execution_id}", self._execution_id)
+                        arg.replace("{experiment_id}", self._experiment_id)
+                        .replace("{execution_id}", self._execution_id)
                         .replace("{iteration}", str(iteration))  # noqa: RUF027
                         .replace("{realization}", str(realization_id))
                     )
@@ -220,31 +247,22 @@ class ExperimentOrchestrator:
             The newly calculated parameter matrix as a Wide DataFrame.
 
         Raises:
-            RuntimeError: If experiment is not started or storage is missing.
             ValueError: If the iteration index is out of bounds or algorithm not found.
         """
-        if self._execution_id is None:
-            msg = "Experiment not started."
-            raise RuntimeError(msg)
-
-        if not self._storage_api:
-            msg = "Storage Query API required for updates."
-            raise RuntimeError(msg)
-
         # 1. Fetch data from storage
         # current_parameters (from storage for this iteration)
         current_params_df = self._storage_api.get_parameters(
-            self._config.name,
-            self._execution_id,
-            iteration,
+            experiment_id=self._config.name,
+            execution_id=self._execution_id,
+            iteration=iteration,
         )
 
         # simulated_responses (from storage for this iteration)
         obs_df = self._observations_to_df()
         sim_resp_df = self._storage_api.get_responses(
-            self._config.name,
-            self._execution_id,
-            iteration,
+            experiment_id=self._config.name,
+            execution_id=self._execution_id,
+            iteration=iteration,
         )
 
         # 2. Find and execute plugin

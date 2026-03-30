@@ -98,6 +98,7 @@ def _ensure_server(
 
 def _poll_for_completion(
     client: httpx.Client,
+    experiment_id: str,
     execution_id: str,
     iteration: int,
     expected_count: int,
@@ -107,7 +108,7 @@ def _poll_for_completion(
     while True:
         try:
             resp = client.get(
-                f"/storage/{execution_id}/ensembles/{iteration}/responses",
+                f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
             )
             resp.raise_for_status()
             responses = resp.json()
@@ -160,15 +161,28 @@ def run_experiment(
 
             if monitor:
                 expected_count = _get_expected_realizations(config_data)
-                start_monitor(api_url, execution_id, expected_count, iteration)
+                start_monitor(
+                    api_url,
+                    config_id,
+                    execution_id,
+                    expected_count,
+                    iteration,
+                )
             elif server_process is not None or wait_for_completion:
                 expected_count = _get_expected_realizations(config_data)
-                _poll_for_completion(client, execution_id, iteration, expected_count)
+                _poll_for_completion(
+                    client,
+                    config_id,
+                    execution_id,
+                    iteration,
+                    expected_count,
+                )
             else:
                 print("\nExperiment is running in the background.")
                 print("You can query the consolidated responses using:")
                 print(
-                    f"  curl {api_url}/storage/{execution_id}"
+                    f"  curl "
+                    f"{api_url}/experiments/{config_id}/executions/{execution_id}"
                     f"/ensembles/{iteration}/responses",
                 )
 

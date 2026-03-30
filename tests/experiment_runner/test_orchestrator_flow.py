@@ -89,7 +89,7 @@ def orchestrator(
             return_value=mock_storage,
         ),
     ):
-        return ExperimentOrchestrator(config=config)
+        return ExperimentOrchestrator(config=config, experiment_id="test-exp")
 
 
 @pytest.mark.asyncio
@@ -203,7 +203,7 @@ async def test_run_experiment_no_updates(
             return_value=mock_storage,
         ),
     ):
-        orchestrator = ExperimentOrchestrator(config=config)
+        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
 
     callback: Any = None
 

@@ -36,7 +36,7 @@ class TestRealizationWorkdirManager:
         manager = RealizationWorkdirManager(base_workdir=tmp_path)
 
         workdir = manager.create_workdir(
-            experiment_name="exp-123",
+            experiment_id="exp-123",
             execution_id="ens-abc",
             iteration=0,
             realization=5,
@@ -173,11 +173,11 @@ class TestRealizationWorkdirManager:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base_workdir = Path(tmp_dir)
             # Generate a realistic experiment ID using UUID4
-            experiment_name = str(uuid.uuid4())
+            experiment_id = str(uuid.uuid4())
             manager = RealizationWorkdirManager(base_workdir=base_workdir)
 
             workdir = manager.create_workdir(
-                experiment_name,
+                experiment_id,
                 execution_id,
                 0,
                 realization,
@@ -185,7 +185,7 @@ class TestRealizationWorkdirManager:
 
             assert workdir.exists()
             assert workdir.is_dir()
-            assert experiment_name in str(workdir)
+            assert experiment_id in str(workdir)
             assert f"realization-{realization}" in str(workdir)
             assert execution_id in str(workdir)
 

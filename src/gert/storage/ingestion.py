@@ -23,7 +23,7 @@ class IngestionReceiver:
 
     def receive(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
         payload: IngestionPayload,
@@ -31,7 +31,7 @@ class IngestionReceiver:
         """Append an ingestion payload to the experiment ensemble's .jsonl queue.
 
         Args:
-            experiment_name: The name of the experiment.
+            experiment_id: The ID of the experiment.
             execution_id: The unique ID of the execution.
             iteration: The iteration number.
             payload: The ingestion payload to store.
@@ -40,10 +40,7 @@ class IngestionReceiver:
             TypeError: If the payload is not a Pydantic model.
         """
         queue_dir = (
-            self._base_storage_path
-            / experiment_name
-            / execution_id
-            / f"iter-{iteration}"
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
         )
         queue_dir.mkdir(parents=True, exist_ok=True)
 

@@ -13,6 +13,11 @@ def main() -> None:
         description="A slow polynomial forward model for GERT.",
     )
     parser.add_argument(
+        "--experiment-id",
+        required=True,
+        help="The GERT experiment ID",
+    )
+    parser.add_argument(
         "--execution-id",
         required=True,
         help="The GERT execution ID",
@@ -46,7 +51,8 @@ def main() -> None:
     elapsed_time = 0.0
     step = 0
     ingest_url = (
-        f"{args.api_url}/storage/{args.execution_id}/ensembles/{args.iteration}/ingest"
+        f"{args.api_url}/experiments/{args.experiment_id}/executions/"
+        f"{args.execution_id}/ensembles/{args.iteration}/ingest"
     )
 
     while elapsed_time < total_time:

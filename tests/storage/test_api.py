@@ -28,10 +28,10 @@ def test_get_responses_diagonal_concatenation(
     """Prove that get_responses collects disparate schema tables and diagonally
     concatenates them into a massive Tidy DataFrame without dropping columns.
     """
-    exp_name = "test_exp"
+    exp_id = "test_exp"
     exec_id = "run_1"
     iter_nr = 0
-    iter_dir = storage_path / exp_name / exec_id / f"iter-{iter_nr}"
+    iter_dir = storage_path / exp_id / exec_id / f"iter-{iter_nr}"
     iter_dir.mkdir(parents=True)
     resp_dir = iter_dir / "responses"
     resp_dir.mkdir()
@@ -60,7 +60,7 @@ def test_get_responses_diagonal_concatenation(
     summary_df.write_parquet(resp_dir / "summary.parquet")
 
     # Execute
-    result = api.get_responses(exp_name, exec_id, iter_nr)
+    result = api.get_responses(exp_id, exec_id, iter_nr)
 
     # Assertions
     # It should have 4 rows (2 wells + 2 summaries)
@@ -85,10 +85,10 @@ def test_get_parameters_unrolls_spatial_schemas(
     """Prove that get_parameters groups spatial coordinates into perfectly
     sorted pl.List columns and joins them horizontally with scalar parameters.
     """
-    exp_name = "test_params"
+    exp_id = "test_params"
     exec_id = "run_1"
     iter_nr = 0
-    iter_dir = storage_path / exp_name / exec_id / f"iter-{iter_nr}"
+    iter_dir = storage_path / exp_id / exec_id / f"iter-{iter_nr}"
     iter_dir.mkdir(parents=True)
     param_dir = iter_dir / "parameters"
     param_dir.mkdir()
@@ -124,7 +124,7 @@ def test_get_parameters_unrolls_spatial_schemas(
         )
 
     # Execute
-    result = api.get_parameters(exp_name, exec_id, iter_nr)
+    result = api.get_parameters(exp_id, exec_id, iter_nr)
 
     # Assertions
     assert len(result) == 2
@@ -142,10 +142,10 @@ def test_write_parameters_uses_spatial_templates(
     """Prove that write_parameters uses the prior parquet files as templates to explode
     the pl.List columns back into exact spatial coordinates.
     """
-    exp_name = "test_write"
+    exp_id = "test_write"
     exec_id = "run_1"
     iter_nr = 0
-    iter_dir = storage_path / exp_name / exec_id / f"iter-{iter_nr}"
+    iter_dir = storage_path / exp_id / exec_id / f"iter-{iter_nr}"
     iter_dir.mkdir(parents=True)
     param_dir = iter_dir / "parameters"
     param_dir.mkdir()
@@ -170,7 +170,7 @@ def test_write_parameters_uses_spatial_templates(
     )
 
     # 3. Execute write
-    api.write_parameters(exp_name, exec_id, iter_nr, updated_wide_df)
+    api.write_parameters(exp_id, exec_id, iter_nr, updated_wide_df)
 
     # 4. Assertions
     written_df = pl.read_parquet(param_dir / "grid.parquet")

@@ -16,14 +16,16 @@ def test_client() -> TestClient:
 
 def test_monitoring_api_get_status(test_client: TestClient) -> None:
     """Test the GET endpoint for experiment status."""
-    experiment_id = "test-exp-2"
-    _experiment_statuses[experiment_id][0] = RealizationStatus(
+    execution_id = "run_1-test"
+    _experiment_statuses[execution_id][0] = RealizationStatus(
         realization_id=0,
         iteration=1,
         status="COMPLETED",
     )
 
-    response = test_client.get(f"/experiments/{experiment_id}/status")
+    # Note: We are testing the specific execution status endpoint here
+    # Since we didn't register a config, we use a dummy experiment_id
+    response = test_client.get(f"/experiments/dummy/executions/{execution_id}/status")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1

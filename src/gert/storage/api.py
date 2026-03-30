@@ -14,14 +14,11 @@ class StorageAPI:
         """Initialize the query API with a base storage path."""
         self._base_storage_path = base_storage_path
 
-    def flush(self, experiment_name: str, execution_id: str, iteration: int) -> bool:
+    def flush(self, experiment_id: str, execution_id: str, iteration: int) -> bool:
         """Forces the Consolidator to drain the queue entirely before returning."""
         worker = ConsolidationWorker(self._base_storage_path)
         queue_dir = (
-            self._base_storage_path
-            / experiment_name
-            / execution_id
-            / f"iter-{iteration}"
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
         )
 
         if queue_dir.exists():
@@ -30,7 +27,7 @@ class StorageAPI:
 
     def get_responses(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
     ) -> pl.DataFrame:
@@ -43,10 +40,7 @@ class StorageAPI:
             FileNotFoundError: If the consolidated data doesn't exist.
         """
         iter_dir = (
-            self._base_storage_path
-            / experiment_name
-            / execution_id
-            / f"iter-{iteration}"
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
         )
         resp_dir = iter_dir / "responses"
 
@@ -58,7 +52,7 @@ class StorageAPI:
             legacy = iter_dir / "responses.parquet"
             if legacy.exists():
                 return pl.read_parquet(legacy)
-            msg = f"Consolidated data for experiment '{experiment_name}' not found."
+            msg = f"Consolidated data for experiment '{experiment_id}' not found."
             raise FileNotFoundError(msg)
 
         dfs = [pl.read_parquet(f) for f in schema_files]
@@ -66,7 +60,7 @@ class StorageAPI:
 
     def get_parameters(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
     ) -> pl.DataFrame:
@@ -79,10 +73,7 @@ class StorageAPI:
             FileNotFoundError: If the parameters for the iteration are not found.
         """
         iter_dir = (
-            self._base_storage_path
-            / experiment_name
-            / execution_id
-            / f"iter-{iteration}"
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
         )
         param_dir = iter_dir / "parameters"
 
@@ -116,17 +107,14 @@ class StorageAPI:
 
     def write_parameters(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
         parameters: pl.DataFrame,
     ) -> None:
         """Write the parameter matrix back to partitioned schema storage."""
         iter_dir = (
-            self._base_storage_path
-            / experiment_name
-            / execution_id
-            / f"iter-{iteration}"
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
         )
         param_dir = iter_dir / "parameters"
         param_dir.mkdir(parents=True, exist_ok=True)

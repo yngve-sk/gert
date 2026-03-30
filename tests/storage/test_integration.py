@@ -37,7 +37,10 @@ def test_storage_integration_blast(clean_storage: None) -> None:
     }
     response = client.post("/experiments", json=config_data)
     assert response.status_code == 201
-    execution_id = response.json()["id"]
+    experiment_id = response.json()["id"]
+    # For storage tests, execution_id can be the same as experiment_id
+    # but the API now requires both in the path.
+    execution_id = experiment_id
     experiment_name = "blast-test"
 
     iteration = 0
@@ -55,7 +58,7 @@ def test_storage_integration_blast(clean_storage: None) -> None:
 
     for payload in payloads:
         response = client.post(
-            f"/storage/{execution_id}/ensembles/{iteration}/ingest",
+            f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
             json=payload,
         )
         assert response.status_code == 202
@@ -64,7 +67,9 @@ def test_storage_integration_blast(clean_storage: None) -> None:
     worker.consolidate(experiment_name, execution_id)
 
     # 2. Retrieve responses
-    response = client.get(f"/storage/{execution_id}/ensembles/{iteration}/responses")
+    response = client.get(
+        f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+    )
     assert response.status_code == 200
 
     data = response.json()
@@ -93,7 +98,8 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
     }
     response = client.post("/experiments", json=config_data)
     assert response.status_code == 201
-    execution_id = response.json()["id"]
+    experiment_id = response.json()["id"]
+    execution_id = experiment_id
     experiment_name = "concurrent-blast-test"
 
     iteration = 0
@@ -112,7 +118,7 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
             }
             tasks.append(
                 ac.post(
-                    f"/storage/{execution_id}/ensembles/{iteration}/ingest",
+                    f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
                     json=payload,
                 ),
             )
@@ -127,7 +133,9 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
 
     # Verify via regular TestClient
     client = TestClient(gert_server_app)
-    response = client.get(f"/storage/{execution_id}/ensembles/{iteration}/responses")
+    response = client.get(
+        f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 100

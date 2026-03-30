@@ -54,7 +54,7 @@ def base_config() -> ExperimentConfig:
 @pytest.fixture
 def orchestrator(base_config: ExperimentConfig) -> ExperimentOrchestrator:
     """Provide an ExperimentOrchestrator instance with real dependencies."""
-    return ExperimentOrchestrator(config=base_config)
+    return ExperimentOrchestrator(config=base_config, experiment_id="test-exp-id")
 
 
 class TestExperimentOrchestrator:
@@ -74,20 +74,12 @@ class TestExperimentOrchestrator:
             observations=[],
         )
         orchestrator._config = config
-        exp_id = orchestrator.start_experiment()
+        exp_id = orchestrator.execution_id
 
         assert isinstance(exp_id, str)
         assert len(exp_id) > 0
         assert orchestrator._config == config
         assert orchestrator._execution_id == exp_id
-
-    def test_run_realization_requires_start_experiment(
-        self,
-        orchestrator: ExperimentOrchestrator,
-    ) -> None:
-        """run_realization raises RuntimeError if experiment has not been started."""
-        with pytest.raises(RuntimeError, match="Experiment not started"):
-            orchestrator.evaluate_forward_model(0, 0)
 
     def test_run_iteration_rejects_negative_iteration(
         self,
@@ -102,8 +94,7 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator._config = config
-        orchestrator.start_experiment()
+        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
         with pytest.raises(ValueError, match="Iteration number must be >= 0"):
             orchestrator.run_iteration(-1, ParameterMatrix())
 
@@ -120,8 +111,7 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator._config = config
-        orchestrator.start_experiment()
+        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
         with pytest.raises(ValueError, match="Realization number must be >= 0"):
             orchestrator.evaluate_forward_model(-1, 0)
 
@@ -138,8 +128,7 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator._config = config
-        orchestrator.start_experiment()
+        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
         with pytest.raises(ValueError, match="Iteration number must be >= 0"):
             orchestrator.evaluate_forward_model(0, -1)
 
@@ -164,8 +153,7 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator._config = config
-        orchestrator.start_experiment()
+        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
 
         parameters = ParameterMatrix(
             values={
@@ -209,8 +197,8 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator = ExperimentOrchestrator(config=config)
-        exp_id = orchestrator.start_experiment()
+        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
+        exp_id = orchestrator.execution_id
 
         orchestrator.evaluate_forward_model(
             realization_id=42,
