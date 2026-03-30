@@ -1,0 +1,78 @@
+{
+  "name": "triple-enif-example",
+  "forward_model_steps": [
+    {
+      "name": "simple_polynomial",
+      "executable": "simple_polynomial.py",
+      "args": [
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}"
+      ]
+    }
+  ],
+  "updates": [
+    {
+      "name": "enif_step_1",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 42
+      }
+    },
+    {
+      "name": "enif_step_2",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 43
+      }
+    },
+    {
+      "name": "enif_step_3",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 44
+      }
+    }
+  ],
+  "queue_config": {
+    "backend": "local",
+    "custom_attributes": {}
+  },
+  "parameter_matrix": {
+    "metadata": {
+      "MULTFLT": {
+        "source": "prior",
+        "updatable": true
+      }
+    },
+    "values": {
+      "MULTFLT": {
+        "0": 1.0,
+        "1": 2.0,
+        "2": 3.0,
+        "3": 4.0,
+        "4": 5.0,
+        "5": 6.0,
+        "6": 7.0,
+        "7": 8.0,
+        "8": 9.0,
+        "9": 10.0
+      }
+    },
+    "datasets": []
+  },
+  "observations": [
+    {
+      "key": {
+        "response": "FOPR"
+      },
+      "value": 100.0,
+      "std_dev": 10.0
+    }
+  ]
+}
