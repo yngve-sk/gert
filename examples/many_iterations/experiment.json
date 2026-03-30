@@ -1,0 +1,77 @@
+{
+  "name": "many-iterations-example",
+  "forward_model_steps": [
+    {
+      "name": "fast_polynomial",
+      "executable": "fast_polynomial.py",
+      "args": [
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}"
+      ]
+    }
+  ],
+  "updates": [
+    { "name": "step_1", "algorithm": "enif_update", "arguments": { "random_seed": 1 } },
+    { "name": "step_2", "algorithm": "enif_update", "arguments": { "random_seed": 2 } },
+    { "name": "step_3", "algorithm": "enif_update", "arguments": { "random_seed": 3 } },
+    { "name": "step_4", "algorithm": "enif_update", "arguments": { "random_seed": 4 } },
+    { "name": "step_5", "algorithm": "enif_update", "arguments": { "random_seed": 5 } },
+    { "name": "step_6", "algorithm": "enif_update", "arguments": { "random_seed": 6 } },
+    { "name": "step_7", "algorithm": "enif_update", "arguments": { "random_seed": 7 } },
+    { "name": "step_8", "algorithm": "enif_update", "arguments": { "random_seed": 8 } },
+    { "name": "step_9", "algorithm": "enif_update", "arguments": { "random_seed": 9 } },
+    { "name": "step_10", "algorithm": "enif_update", "arguments": { "random_seed": 10 } },
+    { "name": "step_11", "algorithm": "enif_update", "arguments": { "random_seed": 11 } },
+    { "name": "step_12", "algorithm": "enif_update", "arguments": { "random_seed": 12 } },
+    { "name": "step_13", "algorithm": "enif_update", "arguments": { "random_seed": 13 } },
+    { "name": "step_14", "algorithm": "enif_update", "arguments": { "random_seed": 14 } },
+    { "name": "step_15", "algorithm": "enif_update", "arguments": { "random_seed": 15 } },
+    { "name": "step_16", "algorithm": "enif_update", "arguments": { "random_seed": 16 } },
+    { "name": "step_17", "algorithm": "enif_update", "arguments": { "random_seed": 17 } },
+    { "name": "step_18", "algorithm": "enif_update", "arguments": { "random_seed": 18 } },
+    { "name": "step_19", "algorithm": "enif_update", "arguments": { "random_seed": 19 } }
+  ],
+  "queue_config": {
+    "backend": "local",
+    "custom_attributes": {}
+  },
+  "parameter_matrix": {
+    "metadata": {
+      "MULTFLT": {
+        "source": "prior",
+        "updatable": true
+      }
+    },
+    "values": {
+      "MULTFLT": {
+        "0": 1.0,
+        "1": 2.0,
+        "2": 3.0,
+        "3": 4.0,
+        "4": 5.0,
+        "5": 6.0,
+        "6": 7.0,
+        "7": 8.0,
+        "8": 9.0,
+        "9": 10.0
+      }
+    },
+    "datasets": []
+  },
+  "observations": [
+    {
+      "key": {
+        "response": "FOPR"
+      },
+      "value": 50.0,
+      "std_dev": 2.0
+    }
+  ],
+  "consolidation_interval": 0.5
+}
