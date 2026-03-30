@@ -4,8 +4,11 @@ import asyncio
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import polars as pl
+import psij
 import pytest
 
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
@@ -142,12 +145,12 @@ class TestExperimentOrchestrator:
 
         config = ExperimentConfig(
             name="test_experiment",
-            base_working_directory=Path(),
+            base_working_directory=tmp_path,
             forward_model_steps=[
                 ExecutableForwardModelStep(
                     name="step1",
                     executable="echo",
-                    args=["realization_executed", ">>", str(tmp_path / "summary.txt")],
+                    args=["realization_executed"],
                 ),
             ],
             queue_config=QueueConfig(backend="local"),
@@ -156,24 +159,47 @@ class TestExperimentOrchestrator:
         )
         orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
 
-        parameters = ParameterMatrix(
-            values={
-                "param1": {0: 1.0, 1: 2.0},
-                "param2": {1: 3.0, 2: 4.0},
-            },
-        )
+        # Mock submitter to write logs and call callback immediately
+        def side_effect_submit(
+            execution_steps: list[dict[str, str]],
+            directory: Path,
+            status_callback: Callable[[psij.Job, psij.JobStatus], None],
+            **kwargs: Any,
+        ) -> str:
+            # Write expected output files to directory
+            for step in execution_steps:
+                (directory / f"{step['name']}.stdout").write_text(
+                    "realization_executed",
+                )
 
-        orchestrator.run_iteration(5, parameters)
+            # Trigger completion
+            job = MagicMock(spec=psij.Job)
+            status = psij.JobStatus(psij.JobState.COMPLETED)
+            status_callback(job, status)
+            return "job_id"
 
-        summary_file = tmp_path / "summary.txt"
+        with patch.object(
+            orchestrator._job_submitter,
+            "submit",
+            side_effect=side_effect_submit,
+        ):
+            parameters = ParameterMatrix(
+                values={
+                    "param1": {0: 1.0, 1: 2.0},
+                    "param2": {1: 3.0, 2: 4.0},
+                },
+            )
 
-        def check_summary_lines() -> bool:
-            if not summary_file.exists():
-                return False
-            content = summary_file.read_text().strip().split("\n")
-            return len(content) == 3
+            orchestrator.run_iteration(0, parameters)
 
-        assert await _wait_for_condition(check_summary_lines)
+        # Verification using StorageAPI
+        storage = orchestrator._storage_api
+        exec_id = orchestrator.execution_id
+
+        # Should have executed for realizations 0, 1, 2
+        for r_id in [0, 1, 2]:
+            log = storage.get_step_log(config.name, exec_id, 0, r_id, "step1", "stdout")
+            assert "realization_executed" in log
 
     async def test_run_realization_executes_correctly_and_creates_workdir(
         self,
@@ -181,8 +207,6 @@ class TestExperimentOrchestrator:
         tmp_path: Path,
     ) -> None:
         """run_realization correctly creates a workdir and submits a real job."""
-        output_file = tmp_path / "realization_output.txt"
-
         config = ExperimentConfig(
             name="test_experiment",
             base_working_directory=tmp_path,
@@ -191,7 +215,7 @@ class TestExperimentOrchestrator:
                 ExecutableForwardModelStep(
                     name="step1",
                     executable="echo",
-                    args=["hello", ">", str(output_file)],
+                    args=["hello"],
                 ),
             ],
             queue_config=QueueConfig(backend="local"),
@@ -200,11 +224,34 @@ class TestExperimentOrchestrator:
         )
         orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
         exp_id = orchestrator.execution_id
+        storage = orchestrator._storage_api
 
-        orchestrator.evaluate_forward_model(
-            realization_id=42,
-            iteration=3,
-        )
+        # Mock submitter
+        def side_effect_submit(
+            execution_steps: list[dict[str, str]],
+            directory: Path,
+            status_callback: Callable[[psij.Job, psij.JobStatus], None],
+            **kwargs: Any,
+        ) -> str:
+            # Write expected output files to directory
+            for step in execution_steps:
+                (directory / f"{step['name']}.stdout").write_text("hello")
+
+            # Trigger completion
+            job = MagicMock(spec=psij.Job)
+            status = psij.JobStatus(psij.JobState.COMPLETED)
+            status_callback(job, status)
+            return "job_1"
+
+        with patch.object(
+            orchestrator._job_submitter,
+            "submit",
+            side_effect=side_effect_submit,
+        ):
+            orchestrator.evaluate_forward_model(
+                realization_id=42,
+                iteration=3,
+            )
 
         # Verify workdir creation
         expected_workdir = (
@@ -213,9 +260,9 @@ class TestExperimentOrchestrator:
         assert expected_workdir.exists()
         assert expected_workdir.is_dir()
 
-        # Verify real execution output
-        assert await _wait_for_condition(output_file.exists)
-        assert output_file.read_text().strip() == "hello"
+        # Verify log movement
+        log = storage.get_step_log(config.name, exp_id, 3, 42, "step1", "stdout")
+        assert log.strip() == "hello"
 
     def test_parameter_matrix_to_df(self, orchestrator: ExperimentOrchestrator) -> None:
         """Test conversion from ParameterMatrix to wide DataFrame."""

@@ -49,7 +49,9 @@ class TestJobSubmitter:
         output_file = tmp_path / "test_output.txt"
 
         job_id = submitter.submit(
-            execution_steps=[f"echo 'Hello from job' > {output_file}"],
+            execution_steps=[
+                {"name": "echo", "command": f"echo 'Hello from job' > {output_file}"},
+            ],
         )
 
         # Wait for job completion (local executor should be fast)
@@ -69,9 +71,9 @@ class TestJobSubmitter:
 
         job_id = submitter.submit(
             execution_steps=[
-                f"echo 'Step 1' > {output_file}",
-                f"echo 'Step 2' >> {output_file}",
-                f"echo 'Step 3' >> {output_file}",
+                {"name": "step1", "command": f"echo 'Step 1' > {output_file}"},
+                {"name": "step2", "command": f"echo 'Step 2' >> {output_file}"},
+                {"name": "step3", "command": f"echo 'Step 3' >> {output_file}"},
             ],
         )
 
@@ -91,7 +93,9 @@ class TestJobSubmitter:
         output_file = tmp_path / "local_test.txt"
 
         job_id = local_submitter.submit(
-            execution_steps=[f"echo 'Local execution' > {output_file}"],
+            execution_steps=[
+                {"name": "local", "command": f"echo 'Local execution' > {output_file}"},
+            ],
         )
 
         assert await self._wait_for_condition(output_file.exists)
@@ -106,7 +110,9 @@ class TestJobSubmitter:
 
         # This command will fail, but submit should still return a job ID
         job_id = submitter.submit(
-            execution_steps=["false"],  # Command that always exits with error code 1
+            execution_steps=[
+                {"name": "fail", "command": "false"},
+            ],  # Command that always exits with error code 1
         )
 
         assert isinstance(job_id, str)
@@ -265,11 +271,13 @@ class TestQueueConfigTranslation:
         """Minimal queue config translates to basic JobSpec."""
         submitter = JobSubmitter(queue_config={})
 
-        spec = submitter._translate_to_psij_spec(execution_steps=["echo test"])
+        spec = submitter._translate_to_psij_spec(
+            execution_steps=[{"name": "test", "command": "echo test"}],
+        )
 
         expected_spec = psij.JobSpec(
             executable="/bin/bash",
-            arguments=["-c", "echo test"],
+            arguments=["-c", "set -e\n(echo test)"],
             resources=psij.ResourceSpecV1(),
             attributes=psij.JobAttributes(),
             name=None,
@@ -282,7 +290,9 @@ class TestQueueConfigTranslation:
         queue_config: Mapping[str, str | int] = {"cores": 16, "memory": "8GB"}
         submitter = JobSubmitter(queue_config=queue_config)
 
-        spec = submitter._translate_to_psij_spec(execution_steps=["test"])
+        spec = submitter._translate_to_psij_spec(
+            execution_steps=[{"name": "test", "command": "test"}],
+        )
 
         expected_resources = psij.ResourceSpecV1()
         expected_resources.process_count = 16
@@ -290,7 +300,7 @@ class TestQueueConfigTranslation:
 
         expected_spec = psij.JobSpec(
             executable="/bin/bash",
-            arguments=["-c", "test"],
+            arguments=["-c", "set -e\n(test)"],
             resources=expected_resources,
             attributes=psij.JobAttributes(),
             name=None,
@@ -302,11 +312,13 @@ class TestQueueConfigTranslation:
         """Single execution step creates simple script body."""
         submitter = JobSubmitter(queue_config={})
 
-        spec = submitter._translate_to_psij_spec(execution_steps=["single_command"])
+        spec = submitter._translate_to_psij_spec(
+            execution_steps=[{"name": "single", "command": "single_command"}],
+        )
 
         expected_spec = psij.JobSpec(
             executable="/bin/bash",
-            arguments=["-c", "single_command"],
+            arguments=["-c", "set -e\n(single_command)"],
             resources=psij.ResourceSpecV1(),
             attributes=psij.JobAttributes(),
             name=None,
@@ -315,16 +327,20 @@ class TestQueueConfigTranslation:
         assert spec == expected_spec
 
     def test_translate_multiple_execution_steps_chains_with_and(self) -> None:
-        """Multiple execution steps are chained with &&."""
+        """Multiple execution steps are chained with newlines."""
         submitter = JobSubmitter(queue_config={})
 
         spec = submitter._translate_to_psij_spec(
-            execution_steps=["cmd1", "cmd2", "cmd3"],
+            execution_steps=[
+                {"name": "cmd1", "command": "cmd1"},
+                {"name": "cmd2", "command": "cmd2"},
+                {"name": "cmd3", "command": "cmd3"},
+            ],
         )
 
         expected_spec = psij.JobSpec(
             executable="/bin/bash",
-            arguments=["-c", "cmd1 && cmd2 && cmd3"],
+            arguments=["-c", "set -e\n(cmd1)\n(cmd2)\n(cmd3)"],
             resources=psij.ResourceSpecV1(),
             attributes=psij.JobAttributes(),
             name=None,
@@ -344,7 +360,9 @@ class TestQueueConfigTranslation:
         }
         submitter = JobSubmitter(queue_config=queue_config)
 
-        spec = submitter._translate_to_psij_spec(execution_steps=["test"])
+        spec = submitter._translate_to_psij_spec(
+            execution_steps=[{"name": "test", "command": "test"}],
+        )
 
         expected_resources = psij.ResourceSpecV1()
         expected_resources.process_count = 8
@@ -357,10 +375,32 @@ class TestQueueConfigTranslation:
 
         expected_spec = psij.JobSpec(
             executable="/bin/bash",
-            arguments=["-c", "test"],
+            arguments=["-c", "set -e\n(test)"],
             resources=expected_resources,
             attributes=expected_attributes,
             name="test_job",
         )
 
         assert spec == expected_spec
+
+    def test_translate_with_monitoring(self) -> None:
+        """Monitoring URLs and redirection are correctly added to steps."""
+        submitter = JobSubmitter(queue_config={})
+
+        spec = submitter._translate_to_psij_spec(
+            execution_steps=[{"name": "step1", "command": "cmd1"}],
+            monitoring_url="http://api",
+            experiment_id="exp1",
+            execution_id="run1",
+            iteration=0,
+            realization_id=5,
+        )
+
+        expected_command = (
+            "set -e\n"
+            "curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=RUNNING&step_name=step1' || true\n"
+            "{ (cmd1) > step1.stdout 2> step1.stderr ; } || { curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=FAILED&step_name=step1' || true; exit 1; }\n"
+            "curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=COMPLETED&step_name=step1' || true"
+        )
+
+        assert spec.arguments == ["-c", expected_command]

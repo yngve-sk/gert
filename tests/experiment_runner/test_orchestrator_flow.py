@@ -130,10 +130,16 @@ async def test_run_experiment_loop_flow(
     callbacks: dict[int, Any] = {}
 
     def side_effect_submit(
-        execution_steps: list[str],
+        execution_steps: list[dict[str, str]],
         directory: Path,
         status_callback: Any,
+        monitoring_url: str | None = None,
+        experiment_id: str | None = None,
+        execution_id: str | None = None,
+        iteration: int | None = None,
+        realization_id: int | None = None,
     ) -> str:
+        _ = (monitoring_url, experiment_id, execution_id, iteration, realization_id)
         it = len(callbacks)
         callbacks[it] = status_callback
         return f"job_{it}"
@@ -209,10 +215,16 @@ async def test_run_experiment_no_updates(
     callback: Any = None
 
     def side_effect_submit(
-        execution_steps: list[str],
+        execution_steps: list[dict[str, str]],
         directory: Path,
         status_callback: Any,
+        monitoring_url: str | None = None,
+        experiment_id: str | None = None,
+        execution_id: str | None = None,
+        iteration: int | None = None,
+        realization_id: int | None = None,
     ) -> str:
+        _ = (monitoring_url, experiment_id, execution_id, iteration, realization_id)
         nonlocal callback
         callback = status_callback
         return "job_1"

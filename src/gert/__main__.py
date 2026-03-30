@@ -42,13 +42,9 @@ def _load_config(config_path: Path) -> dict[str, Any]:
         sys.exit(1)
 
     config_dir = config_path.parent.resolve()
-    config_data["base_working_directory"] = str(config_dir)
+    if config_data.get("base_working_directory") in {None, ".", ""}:
+        config_data["base_working_directory"] = str(config_dir)
 
-    for step in config_data.get("forward_model_steps", []):
-        if "executable" in step:
-            exec_path = config_dir / step["executable"]
-            if exec_path.exists():
-                step["executable"] = str(exec_path.resolve())
     return config_data
 
 
@@ -175,13 +171,10 @@ def run_experiment(
             )
 
             if monitor:
-                expected_count = _get_expected_realizations(config_data)
                 start_monitor(
                     api_url,
                     config_id,
                     execution_id,
-                    expected_count,
-                    num_iterations,
                 )
             elif server_process is not None or wait_for_completion:
                 expected_count = _get_expected_realizations(config_data)

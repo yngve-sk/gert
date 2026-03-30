@@ -26,21 +26,39 @@ class JobSubmitter:
 
     def submit(
         self,
-        execution_steps: list[str],
+        execution_steps: list[dict[str, str]],
         directory: Path | None = None,
         status_callback: Callable[[psij.Job, psij.JobStatus], None] | None = None,
+        monitoring_url: str | None = None,
+        experiment_id: str | None = None,
+        execution_id: str | None = None,
+        iteration: int | None = None,
+        realization_id: int | None = None,
     ) -> str:
         """Submit a job using the configured queue settings.
 
         Args:
-            execution_steps: List of shell commands to execute sequentially.
+            execution_steps: List of dicts with 'name' and 'command' keys.
             directory: The directory to execute the job in.
             status_callback: Optional callback for job status changes.
+            monitoring_url: The URL to report step status updates to.
+            experiment_id: The experiment ID.
+            execution_id: The execution ID.
+            iteration: The iteration number.
+            realization_id: The realization ID.
 
         Returns:
             The job ID from the backend scheduler.
         """
-        job_spec = self._translate_to_psij_spec(execution_steps, directory=directory)
+        job_spec = self._translate_to_psij_spec(
+            execution_steps,
+            directory=directory,
+            monitoring_url=monitoring_url,
+            experiment_id=experiment_id,
+            execution_id=execution_id,
+            iteration=iteration,
+            realization_id=realization_id,
+        )
         job = psij.Job(job_spec)
         if status_callback:
             job.set_job_status_callback(status_callback)
@@ -49,21 +67,62 @@ class JobSubmitter:
 
     def _translate_to_psij_spec(
         self,
-        execution_steps: list[str],
+        execution_steps: list[dict[str, str]],
         directory: Path | None = None,
+        monitoring_url: str | None = None,
+        experiment_id: str | None = None,
+        execution_id: str | None = None,
+        iteration: int | None = None,
+        realization_id: int | None = None,
     ) -> psij.JobSpec:
-        """Translate GERT queue config into psij JobSpec.
+        """Translate GERT queue config into psij JobSpec with step monitoring.
 
         Args:
-            execution_steps: List of shell commands to execute sequentially.
+            execution_steps: List of dicts with 'name' and 'command' keys.
             directory: The directory to execute the job in.
+            monitoring_url: Optional monitoring URL for step updates.
+            experiment_id: The experiment ID.
+            execution_id: The execution ID.
+            iteration: The iteration number.
+            realization_id: The realization ID.
 
         Returns:
             A psij JobSpec ready for submission.
         """
         # Create the executable from the execution steps
-        # For multiple steps, we'll chain them with &&
-        command = " && ".join(execution_steps)
+        command_parts = ["set -e"]
+
+        for step in execution_steps:
+            name = step["name"]
+            cmd = step["command"]
+
+            if monitoring_url and experiment_id and execution_id:
+                base_status_url = (
+                    f"{monitoring_url}/experiments/{experiment_id}/executions/"
+                    f"{execution_id}/ensembles/{iteration}/realizations/"
+                    f"{realization_id}/status"
+                )
+
+                # Signal RUNNING, Run command, Signal COMPLETED or FAILED
+                running_url = f"{base_status_url}?status=RUNNING&step_name={name}"
+                failed_url = f"{base_status_url}?status=FAILED&step_name={name}"
+                completed_url = f"{base_status_url}?status=COMPLETED&step_name={name}"
+
+                command_parts.extend(
+                    [
+                        f"curl -s -X POST '{running_url}' || true",
+                        (
+                            f"{{ ({cmd}) > {name}.stdout 2> {name}.stderr ; }} || "
+                            f"{{ curl -s -X POST '{failed_url}' || true; exit 1; }}"
+                        ),
+                        f"curl -s -X POST '{completed_url}' || true",
+                    ],
+                )
+
+            else:
+                command_parts.append(f"({cmd})")
+
+        command = "\n".join(command_parts)
 
         # Create resource specification from queue_config
         resources = psij.ResourceSpecV1()
