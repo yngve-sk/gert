@@ -52,10 +52,13 @@ def main() -> None:
         f"[{args.step_name}] Starting realization {args.realization} "
         f"iteration {args.iteration}",
     )
-    print(f"[{args.step_name}] Working hard...", file=sys.stderr)
+    print(f"[{args.step_name}] Initializing...", file=sys.stderr)
+    print(f"[{args.step_name}] API URL: {args.api_url}")
 
-    # Simulate work (0.2 seconds)
-    time.sleep(0.2)
+    # Simulate work (0.5 seconds)
+    print(f"[{args.step_name}] Computing partial results...")
+    time.sleep(0.5)
+    print(f"[{args.step_name}] Heavy lifting in progress...", file=sys.stderr)
 
     # Read input parameters from current workdir
     param_file = Path("parameters.json")

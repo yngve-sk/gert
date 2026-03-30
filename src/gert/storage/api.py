@@ -160,3 +160,71 @@ class StorageAPI:
             prior_df.write_parquet(filepath)
 
         parameters.write_parquet(iter_dir / "parameters.parquet")
+
+    def get_step_log(
+        self,
+        experiment_id: str,
+        execution_id: str,
+        iteration: int,
+        realization_id: int,
+        step_name: str,
+        log_type: str = "stdout",
+    ) -> str:
+        """Retrieve the stdout or stderr log for a specific step.
+
+        Args:
+            experiment_id: The ID of the experiment.
+            execution_id: The unique ID of the execution.
+            iteration: The iteration number.
+            realization_id: The realization ID.
+            step_name: The name of the forward model step.
+            log_type: Either 'stdout' or 'stderr'.
+
+        Returns:
+            The content of the log file.
+        """
+        log_file = (
+            self._base_storage_path
+            / experiment_id
+            / execution_id
+            / f"iter-{iteration}"
+            / "logs"
+            / f"realization-{realization_id}"
+            / f"{step_name}.{log_type}"
+        )
+        if not log_file.exists():
+            return ""
+        return log_file.read_text(encoding="utf-8")
+
+    def write_step_log(
+        self,
+        experiment_id: str,
+        execution_id: str,
+        iteration: int,
+        realization_id: int,
+        step_name: str,
+        content: str,
+        log_type: str = "stdout",
+    ) -> None:
+        """Write a stdout or stderr log for a specific step.
+
+        Args:
+            experiment_id: The ID of the experiment.
+            execution_id: The unique ID of the execution.
+            iteration: The iteration number.
+            realization_id: The realization ID.
+            step_name: The name of the forward model step.
+            content: The log content to write.
+            log_type: Either 'stdout' or 'stderr'.
+        """
+        log_dir = (
+            self._base_storage_path
+            / experiment_id
+            / execution_id
+            / f"iter-{iteration}"
+            / "logs"
+            / f"realization-{realization_id}"
+        )
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"{step_name}.{log_type}"
+        log_file.write_text(content, encoding="utf-8")

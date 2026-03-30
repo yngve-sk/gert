@@ -1,6 +1,8 @@
 import asyncio
 import json
+import os
 import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,7 @@ import psij
 
 from gert.experiments.models import (
     ExecutableForwardModelStep,
+    ExecutableHook,
     ExperimentConfig,
     ParameterMatrix,
 )
@@ -28,12 +31,70 @@ class ExperimentOrchestrator:
     and mathematical updates based on the immutable ExperimentConfig.
     """
 
+    @staticmethod
+    def validate_config(config: ExperimentConfig) -> None:
+        """Verify that a config is valid for execution on this host.
+
+        This performs context-specific validations like checking if
+        executables exist and are runnable.
+
+        Args:
+            config: The experiment configuration to validate.
+        """
+        # Only validate for local backend to avoid false negatives on cluster
+        if config.queue_config.backend != "local":
+            return
+
+        # Check Forward Model Steps
+        for step in config.forward_model_steps:
+            if isinstance(step, ExecutableForwardModelStep):
+                ExperimentOrchestrator._check_executable(
+                    config,
+                    step.executable,
+                    f"Step '{step.name}'",
+                )
+
+        # Check Lifecycle Hooks
+        for hook in config.lifecycle_hooks:
+            if isinstance(hook, ExecutableHook):
+                ExperimentOrchestrator._check_executable(
+                    config,
+                    hook.executable,
+                    f"Hook '{hook.name}'",
+                )
+
+    @staticmethod
+    def _check_executable(
+        config: ExperimentConfig,
+        exe_path: str,
+        context: str,
+    ) -> None:
+        """Helper to check a single executable path.
+
+        Raises:
+            ValueError: If the executable is not found or not executable.
+        """
+        p = Path(exe_path)
+        if not p.is_absolute():
+            p = (config.base_working_directory / p).resolve()
+
+        if not p.exists():
+            msg = f"{context} executable not found: {p}"
+            raise ValueError(msg)
+        if not p.is_file():
+            msg = f"{context} path is not a file: {p}"
+            raise ValueError(msg)
+        if not os.access(p, os.X_OK):
+            msg = f"{context} file is not executable: {p}"
+            raise ValueError(msg)
+
     def __init__(
         self,
         config: ExperimentConfig,
         experiment_id: str,
         run_count: int = 1,
-        monitoring_callback: Callable[[int, int, str], None] | None = None,
+        monitoring_callback: Callable[[int, int, str, str | None], None] | None = None,
+        api_url: str | None = None,
     ) -> None:
         """Initialize the orchestrator using an immutable config as the base truth.
 
@@ -42,10 +103,12 @@ class ExperimentOrchestrator:
             experiment_id: The unique UUID for the experiment configuration.
             run_count: The sequential run count for this experiment (defaults to 1).
             monitoring_callback: Optional callback to notify about job status changes.
+            api_url: Optional base URL for the GERT server API.
         """
         self._config = config
         self._experiment_id = experiment_id
         self._monitoring_callback = monitoring_callback
+        self._api_url = api_url
 
         # Constructor Completeness: Generate execution ID immediately
         exp_uuid = uuid.uuid4().hex
@@ -64,11 +127,17 @@ class ExperimentOrchestrator:
         self._plugins = GertRuntimePlugins()
 
         # Track active jobs per iteration: {iteration: {realization_id: job_id}}
-        self._active_jobs: dict[int, dict[int, str]] = {}
+        self._active_jobs: dict[int, dict[int, str]] = defaultdict(dict)
         # Track completed jobs: {iteration: set(realization_id)}
-        self._completed_realizations: dict[int, set[int]] = {}
+        self._completed_realizations: dict[int, set[int]] = defaultdict(set)
         # Completion event per iteration
         self._iteration_events: dict[int, asyncio.Event] = {}
+
+    def _ensure_iteration_state(self, iteration: int) -> None:
+        """Ensure state structures exist for a given iteration."""
+        if iteration not in self._iteration_events:
+            self._iteration_events[iteration] = asyncio.Event()
+        # defaultdict handles _active_jobs and _completed_realizations
 
     @property
     def execution_id(self) -> str:
@@ -170,14 +239,12 @@ class ExperimentOrchestrator:
             for payload in parameters.values.values():
                 realizations.update(payload.keys())
 
-        self._active_jobs[iteration] = {}
-        self._completed_realizations[iteration] = set()
-        self._iteration_events[iteration] = asyncio.Event()
+        self._ensure_iteration_state(iteration)
 
         # Initialize all known realizations as PENDING via the callback
         if self._monitoring_callback:
             for r_id in sorted(realizations):
-                self._monitoring_callback(r_id, iteration, "PENDING")
+                self._monitoring_callback(r_id, iteration, "PENDING", None)
 
         for r_id in sorted(realizations):
             job_id = self.evaluate_forward_model(r_id, iteration)
@@ -214,36 +281,126 @@ class ExperimentOrchestrator:
         self._inject_parameters(workdir, realization_id)
 
         # Build commands from config steps
+        execution_steps = self._prepare_execution_steps(iteration, realization_id)
 
+        status_cb = self._create_status_callback(
+            iteration,
+            realization_id,
+            workdir,
+            execution_steps,
+        )
+
+        return self._job_submitter.submit(
+            execution_steps=execution_steps,
+            directory=workdir,
+            status_callback=status_cb,
+            monitoring_url=self._api_url,
+            experiment_id=self._experiment_id,
+            execution_id=self._execution_id,
+            iteration=iteration,
+            realization_id=realization_id,
+        )
+
+    def _prepare_execution_steps(
+        self,
+        iteration: int,
+        realization_id: int,
+    ) -> list[dict[str, str]]:
+        """Prepare execution steps for a realization."""
         execution_steps = []
         for step in self._config.forward_model_steps:
             if isinstance(step, ExecutableForwardModelStep):
-                cmd_parts = [step.executable]
+                # Resolve executable path relative to base_working_directory
+                exe_path = Path(step.executable)
+                if not exe_path.is_absolute():
+                    exe_path = (
+                        self._config.base_working_directory / exe_path
+                    ).resolve()
+
+                cmd_parts = [str(exe_path)]
                 for arg in step.args:
-                    replaced = (
-                        arg.replace("{experiment_id}", self._experiment_id)
-                        .replace("{execution_id}", self._execution_id)
-                        .replace("{iteration}", str(iteration))  # noqa: RUF027
-                        .replace("{realization}", str(realization_id))
-                    )
+                    replaced = arg.replace("{experiment_id}", self._experiment_id)
+                    replaced = replaced.replace("{execution_id}", self._execution_id)
+                    # Use literal string for the placeholder match
+                    replaced = replaced.replace("{iteration}", str(iteration))  # noqa: RUF027
+                    replaced = replaced.replace("{realization}", str(realization_id))
                     cmd_parts.append(replaced)
-                execution_steps.append(" ".join(cmd_parts))
+                execution_steps.append(
+                    {"name": step.name, "command": " ".join(cmd_parts)},
+                )
+        return execution_steps
+
+    def _create_status_callback(
+        self,
+        iteration: int,
+        realization_id: int,
+        workdir: Path,
+        execution_steps: list[dict[str, str]],
+    ) -> Callable[[psij.Job, psij.JobStatus], None]:
+        """Create a status callback for a job."""
 
         def _status_cb(_job: psij.Job, status: psij.JobStatus) -> None:
             if status.final:
+                # Move logs from workdir to permanent storage
+                logs_transferred = False
+                for step in execution_steps:
+                    name = step["name"]
+                    stdout_file = workdir / f"{name}.stdout"
+                    stderr_file = workdir / f"{name}.stderr"
+
+                    if stdout_file.exists():
+                        self._storage_api.write_step_log(
+                            self._config.name,
+                            self._execution_id,
+                            iteration,
+                            realization_id,
+                            name,
+                            stdout_file.read_text(encoding="utf-8"),
+                            "stdout",
+                        )
+                        logs_transferred = True
+                    if stderr_file.exists():
+                        self._storage_api.write_step_log(
+                            self._config.name,
+                            self._execution_id,
+                            iteration,
+                            realization_id,
+                            name,
+                            stderr_file.read_text(encoding="utf-8"),
+                            "stderr",
+                        )
+                        logs_transferred = True
+
+                # If it failed but no logs were found, capture PSI/J or shell errors
+                if status.state == psij.JobState.FAILED and not logs_transferred:
+                    msg = f"Job failed without producing logs. Status: {status.message}"
+                    first_step = (
+                        execution_steps[0]["name"] if execution_steps else "unknown"
+                    )
+                    self._storage_api.write_step_log(
+                        self._config.name,
+                        self._execution_id,
+                        iteration,
+                        realization_id,
+                        first_step,
+                        msg,
+                        "stderr",
+                    )
+
                 self._completed_realizations[iteration].add(realization_id)
                 if len(self._completed_realizations[iteration]) == len(
                     self._active_jobs[iteration],
                 ):
                     self._iteration_events[iteration].set()
             if self._monitoring_callback:
-                self._monitoring_callback(realization_id, iteration, status.state.name)
+                self._monitoring_callback(
+                    realization_id,
+                    iteration,
+                    status.state.name,
+                    None,
+                )
 
-        return self._job_submitter.submit(
-            execution_steps=execution_steps,
-            directory=workdir,
-            status_callback=_status_cb,
-        )
+        return _status_cb
 
     def _inject_parameters(self, workdir: Path, realization_id: int) -> None:
         """Inject parameters.json into the realization workdir."""
