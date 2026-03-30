@@ -40,7 +40,7 @@ def test_create_and_get_experiment() -> None:
     assert "id" in data
     experiment_id = data["id"]
 
-    # Test GET /experiments/{id}/config
+    # Test GET /experiments/{experiment_id}/config
     response = client.get(f"/experiments/{experiment_id}/config")
     assert response.status_code == 200
     retrieved_config = response.json()

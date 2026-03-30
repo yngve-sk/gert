@@ -5,6 +5,8 @@
       "name": "simple_polynomial",
       "executable": "simple_polynomial.py",
       "args": [
+        "--experiment-id",
+        "{experiment_id}",
         "--execution-id",
         "{execution_id}",
         "--realization",

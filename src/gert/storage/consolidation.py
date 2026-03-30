@@ -23,16 +23,16 @@ class ConsolidationWorker:
         """
         self._base_storage_path = base_storage_path
 
-    def consolidate(self, experiment_name: str, execution_id: str) -> None:
+    def consolidate(self, experiment_id: str, execution_id: str) -> None:
         """Drain the .jsonl queue and upsert data into the .parquet response files.
 
         Processes all ensemble (iteration) directories within the execution.
 
         Args:
-            experiment_name: The name of the experiment.
+            experiment_id: The ID of the experiment.
             execution_id: The unique ID of the execution.
         """
-        execution_dir = self._base_storage_path / experiment_name / execution_id
+        execution_dir = self._base_storage_path / experiment_id / execution_id
         if not execution_dir.exists():
             return
 

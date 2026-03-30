@@ -110,7 +110,7 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
             payload = json.loads(f.read())
             # Replace placeholder if needed, but dummy FM already has real values
             client.post(
-                f"/storage/{execution_id}/ensembles/{iteration}/ingest",
+                f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
                 json=payload,
             )
 
@@ -118,7 +118,9 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
     worker.consolidate(config_data["name"], execution_id)
 
     # 4. Verify consolidated data
-    response = client.get(f"/storage/{execution_id}/ensembles/{iteration}/responses")
+    response = client.get(
+        f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2

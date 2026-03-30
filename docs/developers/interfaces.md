@@ -18,15 +18,15 @@ This module contains the strictly defined, domain-agnostic Pydantic models (or d
 This module isolates all high-throughput disk I/O, message queuing, and Parquet consolidation. It does not know about jobs or clusters.
 
 * **`IngestionReceiver` (Interface)**
-    * `push_data(experiment_id: str, payload: IngestionPayload) -> bool`
+    * `push_data(experiment_id: str, execution_id: str, payload: IngestionPayload) -> bool`
     * *Implementation details:* Writes incoming generic JSON directly to a fast, append-only `.jsonl` queue.
 * **`ConsolidationWorker` (Background Process)**
     * `start_watching(queue_path: Path, parquet_path: Path)`
     * *Implementation details:* Uses `polars` to continuously drain the `.jsonl` queue, perform upserts/joins, and update the analytical columnar `.parquet` datasets.
 * **`StorageQueryAPI` (Interface)**
-    * `get_parameters(experiment_id: str, iteration: int) -> DataFrame`
-    * `get_responses(experiment_id: str, iteration: int, keys: List[str] | None) -> DataFrame`
-    * `flush(experiment_id: str, iteration: int) -> bool`: Forces the Consolidator to drain the queue entirely before returning.
+    * `get_parameters(experiment_id: str, execution_id: str, iteration: int) -> DataFrame`
+    * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None) -> DataFrame`
+    * `flush(experiment_id: str, execution_id: str, iteration: int) -> bool`: Forces the Consolidator to drain the queue entirely before returning.
 
 ---
 
@@ -39,7 +39,7 @@ This module acts as the conductor. It reads the config, sets up the environments
     * `run_realization(realization_id: int, iteration: int)`
 * **`JobSubmitter` (Interface wrapping `psij-python`)**
     * `submit(execution_steps: List[Step], queue_config: dict) -> str` (Returns backend job ID)
-    * `cancel_all_jobs(experiment_id: str)`: Hard blocking function to clear the cluster queue.
+    * `cancel_all_jobs(experiment_id: str, execution_id: str)`: Hard blocking function to clear the cluster queue.
 * **`RealizationWorkdirManager`**
     * `create_workdir(iteration: int, realization: int, parameters: dict) -> Path`
     * `cleanup_workdir(iteration: int, realization: int)` (Optional GC)

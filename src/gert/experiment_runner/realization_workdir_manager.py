@@ -24,7 +24,7 @@ class RealizationWorkdirManager:
 
     def create_workdir(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
         realization: int,
@@ -32,10 +32,10 @@ class RealizationWorkdirManager:
         """Create a scratch directory for a realization.
 
         Creates a temporary directory structure like:
-        {base_workdir}/{experiment_name}/{execution_id}/iter-{iteration}/realization-{realization}/
+        {base_workdir}/{experiment_id}/{execution_id}/iter-{iteration}/realization-{realization}/
 
         Args:
-            experiment_name: Unique experiment name.
+            experiment_id: Unique experiment ID.
             execution_id: Unique execution identifier.
             iteration: The iteration number.
             realization: The realization number (0-based, must be >= 0).
@@ -51,7 +51,7 @@ class RealizationWorkdirManager:
             raise ValueError(msg)
 
         workdir = self._build_workdir_path(
-            experiment_name,
+            experiment_id,
             execution_id,
             iteration,
             realization,
@@ -68,7 +68,7 @@ class RealizationWorkdirManager:
 
     def cleanup_workdir(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
         realization: int,
@@ -78,7 +78,7 @@ class RealizationWorkdirManager:
         Only performs cleanup if enable_cleanup was set to True during initialization.
 
         Args:
-            experiment_name: Unique experiment name.
+            experiment_id: Unique experiment ID.
             execution_id: Unique execution identifier.
             iteration: The iteration number.
             realization: The realization number (0-based).
@@ -87,7 +87,7 @@ class RealizationWorkdirManager:
             return
 
         workdir = self._build_workdir_path(
-            experiment_name,
+            experiment_id,
             execution_id,
             iteration,
             realization,
@@ -98,7 +98,7 @@ class RealizationWorkdirManager:
 
     def get_workdir(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
         realization: int,
@@ -106,7 +106,7 @@ class RealizationWorkdirManager:
         """Get the workdir path for a specific realization.
 
         Args:
-            experiment_name: Unique experiment name.
+            experiment_id: Unique experiment ID.
             execution_id: Unique execution identifier.
             iteration: The iteration number.
             realization: The realization number (0-based).
@@ -115,7 +115,7 @@ class RealizationWorkdirManager:
             Path to the workdir directory (may not exist).
         """
         return self._build_workdir_path(
-            experiment_name,
+            experiment_id,
             execution_id,
             iteration,
             realization,
@@ -123,7 +123,7 @@ class RealizationWorkdirManager:
 
     def _build_workdir_path(
         self,
-        experiment_name: str,
+        experiment_id: str,
         execution_id: str,
         iteration: int,
         realization: int,
@@ -131,7 +131,7 @@ class RealizationWorkdirManager:
         """Build the standardized workdir path.
 
         Args:
-            experiment_name: Unique experiment name.
+            experiment_id: Unique experiment ID.
             execution_id: Unique execution identifier.
             iteration: The iteration number.
             realization: The realization number.
@@ -141,7 +141,7 @@ class RealizationWorkdirManager:
         """
         return (
             self._base_workdir
-            / experiment_name
+            / experiment_id
             / str(execution_id)
             / f"iter-{iteration}"
             / f"realization-{realization}"

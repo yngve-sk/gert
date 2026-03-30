@@ -7,7 +7,6 @@ from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
-    Depends,
     HTTPException,
     status,
 )
@@ -17,7 +16,6 @@ from pydantic import BaseModel, Field
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
 from gert.experiments.models import ExperimentConfig, IngestionPayload
 from gert.storage.api import StorageAPI
-from gert.storage.consolidation import ConsolidationWorker
 from gert.storage.ingestion import IngestionReceiver
 
 router = APIRouter(tags=["experiments"])
@@ -44,6 +42,7 @@ _executions_to_configs: dict[str, ExperimentConfig] = {}
 _experiment_statuses: dict[str, dict[int, RealizationStatus]] = defaultdict(dict)
 _consolidation_tasks: set[asyncio.Task[Any]] = set()
 _experiment_run_counts: dict[str, int] = defaultdict(int)
+_latest_execution_id: dict[str, str] = {}
 
 
 @router.post(
@@ -60,7 +59,7 @@ async def create_experiment(config: ExperimentConfig) -> ExperimentResponse:
 
 
 @router.get(
-    "/experiments/{id}/config",
+    "/experiments/{experiment_id}/config",
     summary="Retrieve experiment configuration",
     description="Returns the immutable configuration for a given experiment ID.",
 )
@@ -68,7 +67,6 @@ async def get_experiment_config(
     experiment_id: Annotated[
         str,
         FastApiPath(
-            alias="id",
             description="The unique experiment ID to retrieve.",
         ),
     ],
@@ -87,13 +85,13 @@ async def get_experiment_config(
 
 
 @router.post(
-    "/experiments/{id}/start",
+    "/experiments/{experiment_id}/start",
     summary="Start experiment",
     description="Launches the orchestration loop for a previously "
     "registered experiment.",
 )
 async def start_experiment(
-    experiment_id: Annotated[str, FastApiPath(alias="id")],
+    experiment_id: str,
 ) -> dict[str, Any]:
     """Start an experiment by ID.
 
@@ -127,163 +125,155 @@ async def start_experiment(
                 status=current_status,
             )
 
+    _experiment_run_counts[experiment_id] += 1
     orchestrator = ExperimentOrchestrator(
         config=config,
+        experiment_id=experiment_id,
         monitoring_callback=_monitoring_cb,
-    )
-
-    _experiment_run_counts[experiment_id] += 1
-    execution_id = orchestrator.start_experiment(
         run_count=_experiment_run_counts[experiment_id],
     )
+
+    execution_id = orchestrator.execution_id
     execution_id_ref["id"] = execution_id
     _executions_to_configs[execution_id] = config
+    _latest_execution_id[experiment_id] = execution_id
 
-    # Initialize statuses as PENDING
-    # Determine unique realizations
-    realizations: set[int] = set()
-    if config.parameter_matrix.values:
-        for payload in config.parameter_matrix.values.values():
-            realizations.update(payload.keys())
+    # 1. Execute the orchestrator loop strictly in the background (Fire and Forget)
+    task = asyncio.create_task(orchestrator.run_experiment())
+    _consolidation_tasks.add(task)
+    task.add_done_callback(_consolidation_tasks.discard)
 
-    for r_id in realizations:
-        _experiment_statuses[execution_id][r_id] = RealizationStatus(
-            realization_id=r_id,
-            iteration=0,
-            status="PENDING",
-        )
-    iteration = 0
-    orchestrator.run_iteration(
-        iteration=iteration,
-        parameters=config.parameter_matrix,
-    )
+    # The orchestrator will spawn consolidation workers for each iteration.
 
-    worker = ConsolidationWorker(config.storage_base)
-    queue_path = (
-        config.storage_base
-        / config.name
-        / execution_id
-        / f"iter-{iteration}"
-        / "ingestion_queue.jsonl"
-    )
-
-    # Start the watching background task
-    watch_task = asyncio.create_task(
-        worker.start_watching(queue_path, config.consolidation_interval),
-    )
-    _consolidation_tasks.add(watch_task)
-    watch_task.add_done_callback(_consolidation_tasks.discard)
-
-    async def _completion_monitor() -> None:
-        """Monitor for completion and shutdown the worker properly."""
-        while True:
-            await asyncio.sleep(1.0)
-            statuses = _experiment_statuses.get(execution_id)
-            if statuses and all(
-                s.status in {"COMPLETED", "FAILED"} for s in statuses.values()
-            ):
-                # Wait a short time to allow any in-flight ingestion requests to arrive
-                await asyncio.sleep(1.0)
-                # Flush and cancel watching
-                watch_task.cancel()
-                worker.consolidate(config.name, execution_id)
-                break
-
-    monitor_task = asyncio.create_task(_completion_monitor())
-    _consolidation_tasks.add(monitor_task)
-    monitor_task.add_done_callback(_consolidation_tasks.discard)
-
-    return {"status": "started", "execution_id": execution_id, "iteration": iteration}
+    # Allow a microscopic tick for PENDING statuses to be emitted via callback
+    await asyncio.sleep(0.05)
+    return {"execution_id": execution_id, "iteration": 0}
 
 
 @router.get(
-    "/experiments/{id}/status",
-    summary="Get execution status",
-    description="Returns the execution status of all realizations for an experiment.",
+    "/experiments/{experiment_id}/status",
+    summary="Retrieve latest realization status",
+    description="Returns the status of all realizations for the latest "
+    "execution of a given experiment ID.",
 )
-async def get_experiment_status(
-    experiment_id: Annotated[str, FastApiPath(alias="id")],
+async def get_latest_experiment_status(
+    experiment_id: str,
 ) -> list[RealizationStatus]:
-    """Get the current execution status."""
-    return list(_experiment_statuses[experiment_id].values())
-
-
-# Storage Dependencies
-def get_experiment_config_dependency(
-    experiment_id: Annotated[str, FastApiPath(alias="id")],
-) -> ExperimentConfig:
-    """Dependency to retrieve an experiment configuration by ID.
+    """Retrieve the status of all realizations for the latest experiment run.
 
     Raises:
         HTTPException: If the experiment is not found.
     """
-    if experiment_id in _experiment_configs:
-        return _experiment_configs[experiment_id]
-    if experiment_id in _executions_to_configs:
-        return _executions_to_configs[experiment_id]
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Experiment '{experiment_id}' not found",
-    )
+    if experiment_id not in _latest_execution_id:
+        if experiment_id in _experiment_configs:
+            return []
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found",
+        )
 
-
-def get_ingestion_receiver(
-    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
-) -> IngestionReceiver:
-    """Dependency provider for IngestionReceiver."""
-    return IngestionReceiver(config.storage_base)
-
-
-def get_consolidation_worker(
-    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
-) -> ConsolidationWorker:
-    """Dependency provider for ConsolidationWorker."""
-    return ConsolidationWorker(config.storage_base)
-
-
-def get_query_api(
-    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
-) -> StorageAPI:
-    """Dependency provider for StorageAPI."""
-    return StorageAPI(config.storage_base)
-
-
-@router.post(
-    "/storage/{id}/ensembles/{iteration}/ingest",
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Ingest data",
-    description="Pushes a simulated response or parameter payload into the queue.",
-)
-async def ingest_data(
-    execution_id: Annotated[str, FastApiPath(alias="id")],
-    iteration: int,
-    payload: IngestionPayload,
-    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
-    receiver: Annotated[IngestionReceiver, Depends(get_ingestion_receiver)],
-) -> dict[str, str]:
-    """Ingest a payload for a given experiment and iteration."""
-    receiver.receive(config.name, execution_id, iteration, payload)
-    return {"status": "accepted"}
+    execution_id = _latest_execution_id[experiment_id]
+    return list(_experiment_statuses[execution_id].values())
 
 
 @router.get(
-    "/storage/{id}/ensembles/{iteration}/responses",
-    summary="Retrieve responses",
-    description="Returns all consolidated responses for the experiment and iteration.",
+    "/experiments/{experiment_id}/executions/{execution_id}/status",
+    summary="Retrieve specific execution status",
+    description="Returns the status of all realizations for a specific execution ID.",
 )
-async def get_responses(
-    execution_id: Annotated[str, FastApiPath(alias="id")],
-    iteration: int,
-    config: Annotated[ExperimentConfig, Depends(get_experiment_config_dependency)],
-    query_api: Annotated[StorageAPI, Depends(get_query_api)],
-) -> list[dict[str, Any]]:
-    """Retrieve consolidated responses.
+async def get_execution_status(
+    experiment_id: str,
+    execution_id: str,
+) -> list[RealizationStatus]:
+    """Retrieve the status of all realizations for a specific execution.
+
+    Args:
+        experiment_id: The unique experiment ID.
+        execution_id: The unique execution ID.
 
     Raises:
-        HTTPException: If the experiment or iteration is not found.
+        HTTPException: If the execution is not found.
     """
+    _ = experiment_id  # Unused in current implementation
+    if execution_id not in _experiment_statuses:
+        if execution_id in _executions_to_configs:
+            return []
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+
+    return list(_experiment_statuses[execution_id].values())
+
+
+@router.post(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Ingest data from a forward model",
+    description="Appends a payload (responses or parameters) to the ingestion queue.",
+)
+async def ingest_data(
+    experiment_id: str,
+    execution_id: str,
+    iteration: int,
+    payload: IngestionPayload,
+) -> dict[str, str]:
+    """Ingest payload into the experiment storage queue.
+
+    Raises:
+        HTTPException: If the experiment is not found.
+    """
+    # Resolve experiment_id to config
+    config = _experiment_configs.get(experiment_id)
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+
+    receiver = IngestionReceiver(base_storage_path=config.storage_base)
+    receiver.receive(
+        experiment_id=config.name,
+        execution_id=execution_id,
+        iteration=iteration,
+        payload=payload,
+    )
+    return {"status": "success"}
+
+
+@router.get(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+    summary="Retrieve consolidated responses",
+    description="Returns all consolidated responses for a given execution "
+    "and iteration.",
+)
+async def get_responses(
+    experiment_id: str,
+    execution_id: str,
+    iteration: int,
+) -> list[dict[str, Any]]:
+    """Retrieve consolidated responses as a list of dictionaries.
+
+    Raises:
+        HTTPException: If the experiment or data is not found.
+    """
+    # Resolve experiment_id to config
+    config = _experiment_configs.get(experiment_id)
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+
+    api = StorageAPI(base_storage_path=config.storage_base)
     try:
-        df = query_api.get_responses(config.name, execution_id, iteration)
+        df = api.get_responses(
+            experiment_id=config.name,
+            execution_id=execution_id,
+            iteration=iteration,
+        )
         return df.to_dicts()
     except FileNotFoundError as e:
         raise HTTPException(
