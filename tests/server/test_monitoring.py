@@ -17,9 +17,11 @@ def test_client() -> TestClient:
 def test_monitoring_api_get_status(test_client: TestClient) -> None:
     """Test the GET endpoint for experiment status."""
     execution_id = "run_1-test"
-    _experiment_statuses[execution_id][0] = RealizationStatus(
-        realization_id=0,
-        iteration=1,
+    iteration = 1
+    realization_id = 0
+    _experiment_statuses[execution_id][iteration][realization_id] = RealizationStatus(
+        realization_id=realization_id,
+        iteration=iteration,
         status="COMPLETED",
     )
 

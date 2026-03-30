@@ -39,7 +39,10 @@ class ExperimentResponse(BaseModel):
 # In PR 2.1, this should move to a more persistent storage backend.
 _experiment_configs: dict[str, ExperimentConfig] = {}
 _executions_to_configs: dict[str, ExperimentConfig] = {}
-_experiment_statuses: dict[str, dict[int, RealizationStatus]] = defaultdict(dict)
+_experiment_statuses: dict[
+    str,
+    dict[int, dict[int, RealizationStatus]],
+] = defaultdict(lambda: defaultdict(dict))
 _consolidation_tasks: set[asyncio.Task[Any]] = set()
 _experiment_run_counts: dict[str, int] = defaultdict(int)
 _latest_execution_id: dict[str, str] = {}
@@ -114,16 +117,17 @@ async def start_experiment(
         current_status: str,
     ) -> None:
         exec_id = execution_id_ref["id"]
-        state = _experiment_statuses[exec_id].get(realization_id)
+        # Use (iteration, realization_id) as the key to support multi-step workflows
+        state = _experiment_statuses[exec_id][iteration].get(realization_id)
         if state:
             state.status = current_status
-            state.iteration = iteration
         else:
-            _experiment_statuses[exec_id][realization_id] = RealizationStatus(
+            status_obj = RealizationStatus(
                 realization_id=realization_id,
                 iteration=iteration,
                 status=current_status,
             )
+            _experiment_statuses[exec_id][iteration][realization_id] = status_obj
 
     _experiment_run_counts[experiment_id] += 1
     orchestrator = ExperimentOrchestrator(
@@ -173,7 +177,10 @@ async def get_latest_experiment_status(
         )
 
     execution_id = _latest_execution_id[experiment_id]
-    return list(_experiment_statuses[execution_id].values())
+    all_statuses: list[RealizationStatus] = []
+    for iter_dict in _experiment_statuses[execution_id].values():
+        all_statuses.extend(iter_dict.values())
+    return all_statuses
 
 
 @router.get(
@@ -203,7 +210,10 @@ async def get_execution_status(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    return list(_experiment_statuses[execution_id].values())
+    all_statuses: list[RealizationStatus] = []
+    for iter_dict in _experiment_statuses[execution_id].values():
+        all_statuses.extend(iter_dict.values())
+    return all_statuses
 
 
 @router.post(

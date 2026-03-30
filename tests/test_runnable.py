@@ -14,7 +14,7 @@ from gert.storage.consolidation import ConsolidationWorker
 
 
 @pytest.fixture
-def clean_storage() -> Generator[None, None, None]:
+def clean_storage() -> Generator[None]:
     """Fixture to clean up the storage directory."""
     for path in [Path("./permanent_storage"), Path("./workdirs")]:
         if path.exists():

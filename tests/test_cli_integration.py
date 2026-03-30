@@ -58,7 +58,7 @@ def test_implicit_server_start(simple_example_dir: Path, tmp_path: Path) -> None
 
     assert result.returncode == 0
     assert "Starting temporary server" in result.stdout
-    assert "All realizations completed" in result.stdout
+    assert "Iteration 0 completed" in result.stdout
 
 
 def test_explicit_server_start(simple_example_dir: Path, tmp_path: Path) -> None:
@@ -113,7 +113,7 @@ def test_explicit_server_start(simple_example_dir: Path, tmp_path: Path) -> None
 
         assert result.returncode == 0
         assert "Starting temporary server" not in result.stdout
-        assert "All realizations completed" in result.stdout
+        assert "Iteration 0 completed" in result.stdout
 
     finally:
         server_process.terminate()
@@ -174,7 +174,7 @@ def test_explicit_server_multiple_experiments(
             timeout=10,
         )
         assert res1.returncode == 0
-        assert "All realizations completed" in res1.stdout
+        assert "Iteration 0 completed" in res1.stdout
 
         # Run second experiment
         res2 = subprocess.run(
@@ -194,8 +194,7 @@ def test_explicit_server_multiple_experiments(
             timeout=10,
         )
         assert res2.returncode == 0
-        assert "All realizations completed" in res2.stdout
-
+        assert "Iteration 0 completed" in res2.stdout
     finally:
         server_process.terminate()
         server_process.wait(timeout=5)

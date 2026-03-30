@@ -1,4 +1,4 @@
-# ruff: noqa: S404, S603, PERF203
+# ruff: noqa: S404, S603
 """GERT Command Line Interface."""
 
 import argparse
@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -100,23 +101,37 @@ def _poll_for_completion(
     client: httpx.Client,
     experiment_id: str,
     execution_id: str,
-    iteration: int,
+    num_iterations: int,
     expected_count: int,
 ) -> None:
-    """Poll the API until all realizations are completed."""
-    print(f"\nWaiting for {expected_count} realizations to complete...")
-    while True:
+    """Poll the API until all iterations are completed."""
+    print(f"\nWaiting for {num_iterations} iterations to complete...")
+    completed_iterations: set[int] = set()
+
+    while len(completed_iterations) < num_iterations:
         try:
             resp = client.get(
-                f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+                f"/experiments/{experiment_id}/executions/{execution_id}/status",
             )
             resp.raise_for_status()
-            responses = resp.json()
-            if len(responses) >= expected_count:
-                print("✅ All realizations completed.")
-                print("Consolidated responses:")
-                print(json.dumps(responses, indent=2))
-                break
+            statuses = resp.json()
+
+            iter_counts: dict[int, int] = defaultdict(int)
+            for s in statuses:
+                if s["status"] in {"COMPLETED", "FAILED"}:
+                    iter_counts[s["iteration"]] += 1
+
+            for it in range(num_iterations):
+                if it not in completed_iterations and iter_counts[it] >= expected_count:
+                    print(f"✅ Iteration {it} completed.")
+                    completed_iterations.add(it)
+
+            if len(completed_iterations) < num_iterations:
+                time.sleep(1)
+        except httpx.HTTPError as e:
+            print(f"Polling error: {e}")
+            time.sleep(1)
+
         except httpx.HTTPStatusError as e:
             if e.response.status_code != 404:
                 print(
@@ -153,10 +168,10 @@ def run_experiment(
             response.raise_for_status()
             res_json = response.json()
             execution_id = res_json["execution_id"]
-            iteration = res_json["iteration"]
+            num_iterations = len(config_data.get("updates", [])) + 1
             print(
                 f"✅ Execution started (Execution ID: {execution_id}, "
-                f"Iteration: {iteration})",
+                f"Total Iterations: {num_iterations})",
             )
 
             if monitor:
@@ -166,7 +181,7 @@ def run_experiment(
                     config_id,
                     execution_id,
                     expected_count,
-                    iteration,
+                    num_iterations,
                 )
             elif server_process is not None or wait_for_completion:
                 expected_count = _get_expected_realizations(config_data)
@@ -174,16 +189,17 @@ def run_experiment(
                     client,
                     config_id,
                     execution_id,
-                    iteration,
+                    num_iterations,
                     expected_count,
                 )
             else:
+                last_it = num_iterations - 1
                 print("\nExperiment is running in the background.")
                 print("You can query the consolidated responses using:")
                 print(
                     f"  curl "
                     f"{api_url}/experiments/{config_id}/executions/{execution_id}"
-                    f"/ensembles/{iteration}/responses",
+                    f"/ensembles/{last_it}/responses",
                 )
 
         except httpx.ConnectError:

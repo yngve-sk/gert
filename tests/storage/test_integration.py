@@ -12,7 +12,7 @@ from gert.storage.consolidation import ConsolidationWorker
 
 
 @pytest.fixture
-def clean_storage() -> Generator[None, None, None]:
+def clean_storage() -> Generator[None]:
     """Fixture to clean up the storage directory before and after tests."""
     storage_path = Path("./permanent_storage")
     if storage_path.exists():
