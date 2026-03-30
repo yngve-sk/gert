@@ -22,12 +22,12 @@ class TestJobSubmitter:
     async def _wait_for_condition(
         self,
         condition: Callable[[], bool],
-        timeout: float = 2.0,
+        timeout_seconds: float = 2.0,
         interval: float = 0.01,
     ) -> bool:
         """Wait for a condition to become true with a timeout."""
         start_time = time.time()
-        while time.time() - start_time < timeout:
+        while time.time() - start_time < timeout_seconds:
             if condition():
                 return True
             await asyncio.sleep(interval)

@@ -1,6 +1,8 @@
 import asyncio
+import json
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -79,6 +81,15 @@ class ExperimentOrchestrator:
 
         # Iteration 0 uses prior from config
         current_parameters = self._config.parameter_matrix
+
+        # Write initial parameters to storage for iteration 0
+        if self._storage_api:
+            self._storage_api.write_parameters(
+                experiment_id=self._config.name,
+                execution_id=self._execution_id,
+                iteration=0,
+                parameters=self._parameter_matrix_to_df(current_parameters),
+            )
 
         # Track consolidation background tasks
         consolidation_tasks: set[asyncio.Task[Any]] = set()
@@ -200,7 +211,10 @@ class ExperimentOrchestrator:
             realization=realization_id,
         )
 
+        self._inject_parameters(workdir, realization_id)
+
         # Build commands from config steps
+
         execution_steps = []
         for step in self._config.forward_model_steps:
             if isinstance(step, ExecutableForwardModelStep):
@@ -230,6 +244,16 @@ class ExperimentOrchestrator:
             directory=workdir,
             status_callback=_status_cb,
         )
+
+    def _inject_parameters(self, workdir: Path, realization_id: int) -> None:
+        """Inject parameters.json into the realization workdir."""
+        params = {}
+        for key, val_dict in self._config.parameter_matrix.values.items():
+            if realization_id in val_dict:
+                params[key] = val_dict[realization_id]
+
+        with (workdir / "parameters.json").open("w", encoding="utf-8") as f:
+            json.dump(params, f)
 
     async def _wait_for_iteration(self, iteration: int) -> None:
         """Wait until all realizations in the iteration are final."""
@@ -329,3 +353,30 @@ class ExperimentOrchestrator:
             # Datasets are not explicitly handled in this simple conversion yet
             datasets=self._config.parameter_matrix.datasets,
         )
+
+    def _parameter_matrix_to_df(self, pm: ParameterMatrix) -> pl.DataFrame:
+        """Convert ParameterMatrix to a Wide DataFrame.
+
+        Args:
+            pm: The ParameterMatrix to convert.
+
+        Returns:
+            A Polars DataFrame where rows are realizations.
+        """
+        # Collect all realization IDs
+        realizations: set[int] = set()
+        for val_dict in pm.values.values():
+            realizations.update(val_dict.keys())
+
+        if not realizations:
+            return pl.DataFrame({"realization": []})
+
+        rows = []
+        for r_id in sorted(realizations):
+            row: dict[str, Any] = {"realization": r_id}
+            for key, val_dict in pm.values.items():
+                if r_id in val_dict:
+                    row[key] = val_dict[r_id]
+            rows.append(row)
+
+        return pl.DataFrame(rows)

@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
@@ -18,12 +19,12 @@ from gert.experiments.models import (
 
 async def _wait_for_condition(
     condition: Callable[[], bool],
-    timeout: float = 2.0,
+    timeout_seconds: float = 2.0,
     interval: float = 0.01,
 ) -> bool:
     """Wait for a condition to become true with a timeout."""
     start_time = time.time()
-    while time.time() - start_time < timeout:
+    while time.time() - start_time < timeout_seconds:
         if condition():
             return True
         await asyncio.sleep(interval)
@@ -215,3 +216,19 @@ class TestExperimentOrchestrator:
         # Verify real execution output
         assert await _wait_for_condition(output_file.exists)
         assert output_file.read_text().strip() == "hello"
+
+    def test_parameter_matrix_to_df(self, orchestrator: ExperimentOrchestrator) -> None:
+        """Test conversion from ParameterMatrix to wide DataFrame."""
+        pm = ParameterMatrix(
+            values={
+                "MULTFLT": {0: 1.0, 1: 2.0},
+                "PORO": {0: 0.1, 1: 0.2, 2: 0.3},
+            },
+        )
+        df = orchestrator._parameter_matrix_to_df(pm)
+
+        assert len(df) == 3
+        assert set(df.columns) == {"realization", "MULTFLT", "PORO"}
+        assert df.filter(pl.col("realization") == 0)["MULTFLT"][0] == 1.0
+        assert df.filter(pl.col("realization") == 2)["MULTFLT"][0] is None
+        assert df.filter(pl.col("realization") == 2)["PORO"][0] == 0.3

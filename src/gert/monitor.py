@@ -1,20 +1,17 @@
-# ruff: noqa: BLE001
 """CLI Monitor for GERT experiments using Textual."""
 
 import json
 import time
 import urllib.request
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 from urllib.error import URLError
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Footer, Header, Label, ProgressBar, Static, Tree
-
-if TYPE_CHECKING:
-    from textual.widgets.tree import TreeNode
+from textual.widgets.tree import TreeNode
 
 
 class ResponseViewer(Static):
@@ -40,7 +37,7 @@ class ProgressView(ScrollableContainer):
     """Displays progress bars for each iteration."""
 
 
-class NavigationTree(Tree[int]):
+class NavigationTree(Tree[tuple[int, int] | None]):
     """A tree that allows left/right arrow navigation without scrolling."""
 
     BINDINGS: ClassVar[list[Any]] = [
@@ -67,9 +64,16 @@ class GertMonitorApp(App[None]):
     experiment_id: str
     execution_id: str
     expected_count: int | None
-    iteration: int
+    num_iterations: int
     status_url: str
     responses_url: str | None
+
+    _statuses: dict[tuple[int, int], dict[str, Any]]
+    _responses: dict[tuple[int, int], list[dict[str, Any]]]
+    _iteration_nodes: dict[int, TreeNode[tuple[int, int] | None]]
+    _realization_nodes: dict[tuple[int, int], TreeNode[tuple[int, int] | None]]
+    _iteration_progress: dict[int, ProgressBar]
+    _selected_item: tuple[int, int] | None
 
     CSS = """
     Screen {
@@ -92,15 +96,20 @@ class GertMonitorApp(App[None]):
     }
 
     .iteration-row {
-        height: 3;
+        height: 1;
         layout: horizontal;
-        margin-bottom: 1;
     }
 
     .iteration-label {
         width: 15;
         content-align: right middle;
         padding-right: 1;
+    }
+
+    ProgressBar {
+        width: 1fr;
+        padding: 0;
+        margin: 0;
     }
 
     #bottom-pane {
@@ -129,7 +138,7 @@ class GertMonitorApp(App[None]):
         experiment_id: str,
         execution_id: str | None = None,
         expected_count: int | None = None,
-        iteration: int = 0,
+        num_iterations: int = 1,
     ) -> None:
         super().__init__()
         self.api_url = api_url
@@ -137,30 +146,30 @@ class GertMonitorApp(App[None]):
         exec_id: str = execution_id or ""
         self.execution_id = exec_id
         self.expected_count = expected_count
-        self.iteration = iteration
+        self.num_iterations = num_iterations
 
         if self.execution_id:
             self.status_url = (
                 f"{api_url}/experiments/{experiment_id}"
                 f"/executions/{self.execution_id}/status"
             )
+            # We poll all iterations' responses in _poll_responses
+            # so this initial URL is mostly a placeholder/base.
             self.responses_url = (
                 f"{api_url}/experiments/{experiment_id}/executions/{self.execution_id}"
-                f"/ensembles/{iteration}/responses"
+                f"/ensembles/0/responses"
             )
         else:
             self.status_url = f"{api_url}/experiments/{experiment_id}/status"
-            # If execution_id is unknown, we can't easily poll responses yet
-            # unless we get it from the status first. For now, keep it simple.
             self.responses_url = None
 
-        self._statuses: dict[int, dict[str, Any]] = {}
-        self._responses: dict[int, list[dict[str, Any]]] = defaultdict(list)
-        self._iteration_nodes: dict[int, TreeNode[int]] = {}
-        self._realization_nodes: dict[int, TreeNode[int]] = {}
-        self._iteration_progress: dict[int, ProgressBar] = {}
+        self._statuses = {}
+        self._responses = defaultdict(list)
+        self._iteration_nodes = {}
+        self._realization_nodes = {}
+        self._iteration_progress = {}
         self._exiting = False
-        self._selected_realization_id: int | None = None
+        self._selected_item = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -206,31 +215,34 @@ class GertMonitorApp(App[None]):
                     data = json.loads(response.read().decode("utf-8"))
                     self.call_from_thread(self.process_data, data)
 
-                    if (
-                        self.expected_count is not None
-                        and len(self._statuses) >= self.expected_count
-                        and all(
+                    if self.expected_count is not None:
+                        total_expected = self.expected_count * self.num_iterations
+                        if len(self._statuses) >= total_expected and all(
                             s["status"] in {"COMPLETED", "FAILED"}
                             for s in self._statuses.values()
-                        )
-                    ):
-                        return True
-        except (URLError, Exception):  # noqa: S110
+                        ):
+                            return True
+        except URLError:
             pass
         return False
 
     def _poll_responses(self) -> None:
-        """Poll the responses API."""
-        if not self.responses_url:
-            return
-        try:
-            req = urllib.request.Request(self.responses_url)  # noqa: S310
-            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
-                if response.getcode() == 200:
-                    data = json.loads(response.read().decode("utf-8"))
-                    self.call_from_thread(self.process_responses, data)
-        except (URLError, Exception):  # noqa: S110
-            pass
+        """Poll the responses API for all discovered iterations."""
+        # Poll for each iteration we know about.
+        iterations = {it for it, _ in self._statuses}
+        for it in sorted(iterations):
+            url = (
+                f"{self.api_url}/experiments/{self.experiment_id}"
+                f"/executions/{self.execution_id}/ensembles/{it}/responses"
+            )
+            try:
+                req = urllib.request.Request(url)  # noqa: S310
+                with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
+                    if response.getcode() == 200:
+                        data = json.loads(response.read().decode("utf-8"))
+                        self.call_from_thread(self.process_responses, it, data)
+            except URLError:
+                pass
 
     @work(exclusive=True, thread=True)
     def poll_api(self) -> None:
@@ -261,7 +273,7 @@ class GertMonitorApp(App[None]):
             it = item["iteration"]
             st = item["status"]
 
-            self._statuses[r_id] = item
+            self._statuses[it, r_id] = item
             state_counts[st] += 1
 
             iter_counts[it]["total"] += 1
@@ -277,10 +289,13 @@ class GertMonitorApp(App[None]):
             iter_node = self._iteration_nodes[it]
 
             label = f"Realization {r_id} [{st}]"
-            if r_id not in self._realization_nodes:
-                self._realization_nodes[r_id] = iter_node.add_leaf(label, data=r_id)
+            if (it, r_id) not in self._realization_nodes:
+                self._realization_nodes[it, r_id] = iter_node.add_leaf(
+                    label,
+                    data=(it, r_id),
+                )
             else:
-                self._realization_nodes[r_id].set_label(label)
+                self._realization_nodes[it, r_id].set_label(label)
 
         summary = self.query_one(StateSummary)
         summary.update_summary(state_counts)
@@ -312,45 +327,51 @@ class GertMonitorApp(App[None]):
                 pb.total = counts["total"]
                 pb.progress = counts["done"]
 
-    def process_responses(self, data: list[dict[str, Any]]) -> None:
+    def process_responses(self, iteration: int, data: list[dict[str, Any]]) -> None:
         """Process response data and update the cached responses on the main thread."""
-        new_responses = defaultdict(list)
         for item in data:
             r_id = item.get("realization")
             if r_id is not None:
-                new_responses[r_id].append(item)
-        self._responses = dict(new_responses)
+                self._responses[iteration, r_id].append(item)
 
-    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[int]) -> None:
+    def on_tree_node_highlighted(
+        self,
+        event: Tree.NodeHighlighted[tuple[int, int] | None],
+    ) -> None:
         """Handle tree node highlight to show response data."""
         if event.node.data is not None:
-            self._selected_realization_id = event.node.data
+            self._selected_item = event.node.data
         else:
-            self._selected_realization_id = None
+            self._selected_item = None
         self._update_response_viewer()
 
-    def on_tree_node_selected(self, event: Tree.NodeSelected[int]) -> None:
+    def on_tree_node_selected(
+        self,
+        event: Tree.NodeSelected[tuple[int, int] | None],
+    ) -> None:
         """Handle tree node selection to show response data."""
         if event.node.data is not None:
-            self._selected_realization_id = event.node.data
+            self._selected_item = event.node.data
         else:
-            self._selected_realization_id = None
+            self._selected_item = None
         self._update_response_viewer()
 
     def _update_response_viewer(self) -> None:
         """Update the response viewer for the selected realization."""
-        r_id = self._selected_realization_id
+        item = self._selected_item
         viewer = self.query_one("#response-view", ResponseViewer)
-        if r_id is None:
+        if item is None:
             viewer.update_response("Select a realization to view its last response.")
             return
 
-        state = self._statuses.get(r_id)
+        it, r_id = item
+        state = self._statuses.get((it, r_id))
         if state:
-            responses = self._responses.get(r_id, [])
+            responses = self._responses.get((it, r_id), [])
             last_value = None
             key_fields = {}
             if responses:
+                # Use only the last one for brevity
                 last_resp = responses[-1]
                 known_fields = {"realization", "source_step", "value", "type"}
                 key_fields = {
@@ -362,7 +383,7 @@ class GertMonitorApp(App[None]):
 
             content = [
                 f"Realization: {r_id}",
-                f"Iteration: {state['iteration']}",
+                f"Iteration: {it}",
                 f"Status: {state['status']}",
                 f"Responses Emitted: {len(responses)}",
                 "",
@@ -383,7 +404,7 @@ def start_monitor(
     experiment_id: str,
     execution_id: str | None = None,
     expected_count: int | None = None,
-    iteration: int = 0,
+    num_iterations: int = 1,
 ) -> None:
     """Entry point for the monitor CLI command."""
     app = GertMonitorApp(
@@ -391,6 +412,6 @@ def start_monitor(
         experiment_id,
         execution_id,
         expected_count,
-        iteration,
+        num_iterations,
     )
     app.run()

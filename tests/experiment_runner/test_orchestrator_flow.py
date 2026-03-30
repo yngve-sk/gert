@@ -168,7 +168,8 @@ async def test_run_experiment_loop_flow(
     # Final checks
     assert mock_job_submitter.submit.call_count == 2
     assert mock_storage.flush.call_count == 2
-    assert mock_storage.write_parameters.call_count == 1  # written after iter 0 update
+    # Now 2 calls: Initial iteration 0, and after iteration 0 update (for iteration 1)
+    assert mock_storage.write_parameters.call_count == 2
     assert 2 not in orchestrator._active_jobs
 
 

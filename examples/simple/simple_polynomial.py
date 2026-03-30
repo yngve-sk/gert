@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import sys
+from pathlib import Path
 
 import httpx
 
@@ -39,8 +41,18 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Simulate a polynomial model: response = 100 + 10 * realization^2
-    computed_value = float(100 + 10 * (args.realization**2))
+    # 1. Read input parameters from current workdir
+    param_file = Path("parameters.json")
+    if param_file.exists():
+        params = json.loads(param_file.read_text(encoding="utf-8"))
+        x = float(params.get("MULTFLT", 1.0))
+    else:
+        # Fallback for manual testing
+        print("[Polynomial Model] parameters.json not found, using realization x")
+        x = float(args.realization)
+
+    # Execute the "Math" (y = x^2 + 10)
+    computed_value = float(x**2 + 10)
 
     payload = {
         "realization": args.realization,

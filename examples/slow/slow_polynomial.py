@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # ruff: noqa: S311
 import argparse
+import json
 import random
 import sys
 import time
+from pathlib import Path
 
 import httpx
 
@@ -42,6 +44,16 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # 1. Read input parameters from current workdir
+    param_file = Path("parameters.json")
+    if param_file.exists():
+        params = json.loads(param_file.read_text(encoding="utf-8"))
+        x = float(params.get("MULTFLT", 1.0))
+    else:
+        # Fallback for manual testing
+        print("[Slow Model] parameters.json not found, using realization x")
+        x = float(args.realization)
+
     # Simulate a slow process (20-30 seconds total)
     total_time = random.uniform(20.0, 30.0)
     print(
@@ -65,7 +77,7 @@ def main() -> None:
         step += 1
 
         # Simulate a polynomial model evolving over time
-        computed_value = float(100 + 10 * (args.realization**2) + step)
+        computed_value = float(x**2 + 10 + step)
 
         payload = {
             "realization": args.realization,

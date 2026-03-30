@@ -1,11 +1,10 @@
 """Core immutable data models for GERT experiments."""
 
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, Self
 
 from pydantic import BaseModel, Field, PositiveFloat, model_validator
-from typing_extensions import Self
 
 
 class ParameterMetadata(BaseModel):
@@ -45,7 +44,7 @@ class ParameterDataset(BaseModel):
 # Sparse inline data: Maps realization ID to a scalar value.
 # Restricted to scalar values per realization for JSON simplicity. Massive
 # 2D/3D fields should be provided out-of-core via ParameterDataset.
-ParameterPayload: TypeAlias = dict[int, float | int | str | bool]
+type ParameterPayload = dict[int, float | int | str | bool]
 
 
 class ParameterMatrix(BaseModel):
@@ -77,7 +76,7 @@ class Observation(BaseModel):
     coordinates: dict[str, float] | None = None
 
 
-class HookEvent(str, Enum):
+class HookEvent(StrEnum):
     """Lifecycle points for external script execution."""
 
     PRE_EXPERIMENT = "pre_experiment"
@@ -259,6 +258,6 @@ class FileParameterIngestionPayload(BaseModel):
     value: FileReference
 
 
-IngestionPayload: TypeAlias = (
+type IngestionPayload = (
     ResponsePayload | InlineParameterIngestionPayload | FileParameterIngestionPayload
 )
