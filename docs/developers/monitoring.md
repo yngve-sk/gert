@@ -25,8 +25,42 @@ The application will be built using a multi-pane layout:
     *   **State Summary:** A dynamic counter that shows the aggregate number of realizations currently in each state across the entire experiment (e.g., `PENDING: 10, RUNNING: 8, COMPLETED: 32, FAILED: 2`).
 
 *   **Navigation & Detail View (Bottom Pane):**
-    *   **Interactive Tree:** A navigable tree widget with the structure `Experiment -> Iteration -> Realization`. This allows the user to drill down into the specific parts of the experiment.
-    *   **Response Viewer:** When a user selects a realization in the tree, this view will display the content of the last response JSON received for that specific realization, providing immediate insight into its output.
+    *   **Hierarchical Navigation (Tree/Table):** A navigable widget with the structure `Experiment -> Iteration -> Realization -> Step`. This allows the user to drill down into the specific parts and execution steps of the experiment.
+    *   **Expand All:** A shortcut key ('e') is provided to expand/collapse all realizations, showing all forward model steps at once.
+    *   **Detail Viewer (Response/Logs):**
+        *   **Realization Selected:** Displays the content of the last response JSON received for that specific realization.
+        *   **Step Selected:** Displays the `stdout` and `stderr` logs for the selected step, along with its status and timing information.
+
+## Monitoring API & Data Model
+
+### Data Model
+The monitoring state is expanded to include step-level granularity:
+
+```python
+class StepStatus(BaseModel):
+    name: str
+    status: str  # PENDING, RUNNING, COMPLETED, FAILED
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+class RealizationStatus(BaseModel):
+    realization_id: int
+    iteration: int
+    status: str
+    steps: list[StepStatus] = []
+```
+
+### Endpoints
+*   `GET /experiments/{exp_id}/executions/{exec_id}/status`: Returns a list of `RealizationStatus` including their associated steps.
+*   `GET /experiments/{exp_id}/executions/{exec_id}/realizations/{r_id}/steps/{step_name}/logs`: Retrieves the `stdout` and `stderr` for a specific step.
+
+## Forward Model Step Execution Monitoring
+
+To capture step-level status and logs without requiring a resident agent on compute nodes, GERT's job submission layer (utilizing `psij-python`) generates an execution wrapper or a multi-step shell script. This wrapper is responsible for:
+
+1.  **State Signaling:** Emitting an HTTP request to the GERT Monitoring API when a step starts (`RUNNING`) and finishes (`COMPLETED` or `FAILED`).
+2.  **Output Redirection:** Redirecting the `stdout` and `stderr` of each step to unique, deterministic log files within the realization's workdir (e.g., `step_0_stdout.log`, `step_0_stderr.log`).
+3.  **Error Propagation:** Ensuring that the failure of any step is correctly captured and reported to the orchestrator.
 
 ## Recommended Tooling
 
