@@ -1,0 +1,652 @@
+{
+  "name": "many-steps-many-iterations",
+  "base_working_directory": ".",
+  "forward_model_steps": [
+    {
+      "name": "step_0",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_0",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_1",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_1",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_2",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_2",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_3",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_3",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_4",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_4",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_5",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_5",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_6",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_6",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_7",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_7",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_8",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_8",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_9",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_9",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_10",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_10",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_11",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_11",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_12",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_12",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_13",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_13",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_14",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_14",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_15",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_15",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_16",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_16",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_17",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_17",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_18",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_18",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_19",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_19",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_20",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_20",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_21",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_21",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_22",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_22",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_23",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_23",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_24",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_24",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_25",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_25",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_26",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_26",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_27",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_27",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_28",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_28",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    },
+    {
+      "name": "step_29",
+      "executable": "./stepper.py",
+      "args": [
+        "--step-name",
+        "step_29",
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}",
+        "--api-url",
+        "http://localhost:8000"
+      ]
+    }
+  ],
+  "updates": [
+    {
+      "name": "update_0",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 0
+      }
+    },
+    {
+      "name": "update_1",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 1
+      }
+    },
+    {
+      "name": "update_2",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 2
+      }
+    },
+    {
+      "name": "update_3",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 3
+      }
+    },
+    {
+      "name": "update_4",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 4
+      }
+    }
+  ],
+  "queue_config": {
+    "backend": "local"
+  },
+  "parameter_matrix": {
+    "metadata": {
+      "MULTFLT": {
+        "updatable": true
+      }
+    },
+    "values": {
+      "MULTFLT": {
+        "0": 1.0,
+        "1": 2.0,
+        "2": 3.0,
+        "3": 4.0,
+        "4": 5.0,
+        "5": 6.0,
+        "6": 7.0,
+        "7": 8.0,
+        "8": 9.0,
+        "9": 10.0
+      }
+    }
+  },
+  "observations": [
+    {
+      "key": {
+        "response": "R_step_0"
+      },
+      "value": 12.0,
+      "std_dev": 2.0
+    },
+    {
+      "key": {
+        "response": "R_step_5"
+      },
+      "value": 62.0,
+      "std_dev": 2.0
+    },
+    {
+      "key": {
+        "response": "R_step_10"
+      },
+      "value": 112.0,
+      "std_dev": 2.0
+    },
+    {
+      "key": {
+        "response": "R_step_15"
+      },
+      "value": 162.0,
+      "std_dev": 2.0
+    },
+    {
+      "key": {
+        "response": "R_step_20"
+      },
+      "value": 212.0,
+      "std_dev": 2.0
+    },
+    {
+      "key": {
+        "response": "R_step_25"
+      },
+      "value": 262.0,
+      "std_dev": 2.0
+    }
+  ],
+  "consolidation_interval": 0.5
+}
