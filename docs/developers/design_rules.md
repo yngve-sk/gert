@@ -49,3 +49,7 @@ This document outlines the core architectural constraints and design rules that 
 ### Rule 12: Dependency Injection via Immutable Configs
 * **Statement:** Core orchestration classes (e.g., `ExperimentOrchestrator`) should prefer receiving an immutable base truth (like `ExperimentConfig`) in their `__init__` rather than accepting pre-instantiated, large dependency objects (like `StorageAPI` or `JobSubmitter`).
 * **Explanation:** Passing the immutable configuration as the single source of truth allows the orchestrator to internally instantiate and manage its own dependencies (Storage, Workdir Managers, Job Submitters) based on the config. This reduces brittle boilerplate in the routing/API layers and guarantees that all internal services are perfectly synchronized with the exact same configuration state.
+
+### Rule 13: Constructor Completeness (No Two-Phase Initialization)
+* **Statement:** Objects must be fully initialized, valid, and ready for use immediately upon instantiation.
+* **Explanation:** Avoid "two-phase" initialization methods (like `start_experiment()`). If an attribute (e.g., `execution_id`, `storage_api`) is required for an object's methods to function, it must be assigned or generated in `__init__`. This eliminates the anti-pattern of scattering defensive `if self.attr is None:` checks throughout downstream business logic.
