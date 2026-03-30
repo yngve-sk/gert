@@ -56,3 +56,6 @@ coverage.xml
 .env
 
 src/gert/version.py
+
+**/*/workdirs
+**/*/permanent_storage
