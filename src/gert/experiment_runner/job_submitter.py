@@ -1,10 +1,13 @@
 """Job submission adapter for psij-python integration."""
 
+import logging
 from collections.abc import Callable, Mapping
 from datetime import timedelta
 from pathlib import Path
 
 import psij
+
+logger = logging.getLogger(__name__)
 
 
 class JobSubmitter:
@@ -23,6 +26,7 @@ class JobSubmitter:
         """
         self._queue_config = queue_config
         self._executor = psij.JobExecutor.get_instance(executor_type)
+        self._jobs: dict[str, psij.Job] = {}
 
     def submit(
         self,
@@ -63,7 +67,17 @@ class JobSubmitter:
         if status_callback:
             job.set_job_status_callback(status_callback)
         self._executor.submit(job)
-        return str(job.id)
+        job_id_str = str(job.id)
+        self._jobs[job_id_str] = job
+        return job_id_str
+
+    def cancel(self, job_id: str) -> None:
+        """Cancel a running job by its ID."""
+        if job := self._jobs.get(job_id):
+            try:
+                self._executor.cancel(job)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Failed to cancel job {job_id}: {e}")
 
     def _translate_to_psij_spec(
         self,

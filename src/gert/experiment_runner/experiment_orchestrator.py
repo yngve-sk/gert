@@ -15,6 +15,7 @@ import psij
 from gert.experiments.models import (
     ExecutableForwardModelStep,
     ExecutableHook,
+    ExecutionState,
     ExperimentConfig,
     ParameterMatrix,
 )
@@ -99,24 +100,21 @@ class ExperimentOrchestrator:
         run_count: int = 1,
         monitoring_callback: Callable[[int, int, str, str | None], None] | None = None,
         api_url: str | None = None,
+        resume_state: ExecutionState | None = None,
     ) -> None:
-        """Initialize the orchestrator using an immutable config as the base truth.
-
-        Args:
-            config: The strictly immutable experiment configuration.
-            experiment_id: The unique UUID for the experiment configuration.
-            run_count: The sequential run count for this experiment (defaults to 1).
-            monitoring_callback: Optional callback to notify about job status changes.
-            api_url: Optional base URL for the GERT server API.
-        """
+        """Initialize the orchestrator using an immutable config as the base truth."""
         self._config = config
         self._experiment_id = experiment_id
         self._monitoring_callback = monitoring_callback
         self._api_url = api_url
 
-        # Constructor Completeness: Generate execution ID immediately
-        exp_uuid = uuid.uuid4().hex
-        self._execution_id = f"run_{run_count}-{exp_uuid}"
+        if resume_state:
+            self._execution_id = resume_state.execution_id
+            self._current_iteration = resume_state.current_iteration
+        else:
+            exp_uuid = uuid.uuid4().hex
+            self._execution_id = f"run_{run_count}-{exp_uuid}"
+            self._current_iteration = 0
 
         # Instantiate internal dependencies based directly on the base truth config
         self._job_submitter = JobSubmitter(
@@ -135,6 +133,15 @@ class ExperimentOrchestrator:
         # Track realization outcomes
         self._successful_realizations: dict[int, set[int]] = defaultdict(set)
         self._failed_realizations: dict[int, set[int]] = defaultdict(set)
+
+        if resume_state:
+            self._successful_realizations[self._current_iteration] = set(
+                resume_state.completed_realizations,
+            )
+            self._failed_realizations[self._current_iteration] = set(
+                resume_state.failed_realizations,
+            )
+
         # Track individual step outcomes: {iteration: {realization_id: set(step_name)}}
         self._successful_steps: dict[int, dict[int, set[str]]] = defaultdict(
             lambda: defaultdict(set),
@@ -146,6 +153,35 @@ class ExperimentOrchestrator:
         self._expected_realizations: dict[int, int] = {}
         # Completion event per iteration
         self._iteration_events: dict[int, asyncio.Event] = {}
+
+        self._pause_requested = False
+        self._force_pause = False
+        self._pause_event = asyncio.Event()
+
+    def pause(self, *, force: bool = False) -> None:
+        """Pause the experiment execution.
+
+        If force=True, cancel running jobs immediately.
+        Otherwise, wait for running jobs to finish but don't start new ones.
+        """
+        self._pause_requested = True
+        self._force_pause = force
+        self._pause_event.set()
+
+        if force:
+            for job_id in self._active_jobs[self._current_iteration].values():
+                self._job_submitter.cancel(job_id)
+            self._save_execution_state("PAUSED", self._current_iteration)
+        else:
+            self._save_execution_state("PAUSING", self._current_iteration)
+
+    @property
+    def is_paused(self) -> bool:
+        return self._pause_requested
+
+    @property
+    def is_force_paused(self) -> bool:
+        return self._force_pause
 
     def _ensure_iteration_state(self, iteration: int) -> None:
         """Ensure state structures exist for a given iteration."""
@@ -248,28 +284,76 @@ class ExperimentOrchestrator:
             await asyncio.sleep(0.1)
             self._iteration_events[iteration].set()
 
-    async def run_experiment(self) -> None:
+    def _save_execution_state(
+        self,
+        status: str,
+        current_iteration: int,
+        error: str | None = None,
+    ) -> None:
+        """Serialize core state to a persistent backing store."""
+        if not self._storage_api:
+            return
+
+        active_jobs = list(self._active_jobs[current_iteration].values())
+        completed = list(self._successful_realizations[current_iteration])
+        failed = list(self._failed_realizations[current_iteration])
+
+        state = ExecutionState(
+            experiment_id=self._experiment_id,
+            execution_id=self._execution_id,
+            status=status,
+            current_iteration=current_iteration,
+            active_job_ids=active_jobs,
+            completed_realizations=completed,
+            failed_realizations=failed,
+            error=error,
+        )
+
+        self._storage_api.write_execution_state(
+            experiment_name=self._config.name,
+            execution_id=self._execution_id,
+            state_data=state,
+        )
+
+    async def run_experiment(self) -> None:  # noqa: C901
         """Execute the full macro iteration loop (N+1 iterations)."""
         num_updates = len(self._config.updates)
 
         # Iteration 0 uses prior from config
         current_parameters = self._config.parameter_matrix
 
-        # Write initial parameters to storage for iteration 0
-        if self._storage_api:
-            self._storage_api.write_parameters(
-                experiment_id=self._config.name,
-                execution_id=self._execution_id,
-                iteration=0,
-                parameters=current_parameters.to_df(
-                    self._config.base_working_directory,
-                ),
-            )
+        self._current_iteration = getattr(self, "_current_iteration", 0)
 
-        # Track consolidation background tasks
+        # If resuming from > 0, we must load parameters from storage for that iteration
+        if self._current_iteration > 0 and self._storage_api:
+            # We don't overwrite Iteration 0's priors, we assume they are safe.
+            # Instead we load the current iteration's parameters that were written
+            # at the end of the previous iteration.
+            param_df = self._storage_api.get_parameters(
+                self._config.name,
+                self._execution_id,
+                self._current_iteration,
+            )
+            current_parameters = current_parameters.replace_values_from_df(param_df)
+        elif self._current_iteration == 0:
+            self._save_execution_state("RUNNING", 0)
+            if self._storage_api:
+                self._storage_api.write_parameters(
+                    experiment_id=self._config.name,
+                    execution_id=self._execution_id,
+                    iteration=0,
+                    parameters=current_parameters.to_df(
+                        self._config.base_working_directory,
+                    ),
+                )
+
         consolidation_tasks: set[asyncio.Task[Any]] = set()
 
-        for i in range(num_updates + 1):
+        for i in range(self._current_iteration, num_updates + 1):
+            if self._pause_requested:
+                break
+
+            self._current_iteration = i
             logger.info(f"Starting iteration {i}/{num_updates}")
             # 0. Start the consolidation background worker for this iteration
             if self._storage_api:
@@ -291,12 +375,16 @@ class ExperimentOrchestrator:
 
             # 1. Run Forward Models for this iteration
             logger.info(f"Submitting forward models for iteration {i}")
-            self.run_iteration(i, current_parameters)
-
-            # 2. Wait for all realizations in this iteration to finish
+            self.run_iteration(
+                i,
+                current_parameters,
+            )  # 2. Wait for all realizations in this iteration to finish
             logger.info(f"Waiting for iteration {i} realizations to complete...")
             await self._wait_for_iteration(i)
             logger.info(f"All realizations for iteration {i} completed.")
+
+            if self._pause_requested:
+                break
 
             # 3. Flush storage and cancel the watching task for this iteration
             if self._storage_api:
@@ -337,14 +425,9 @@ class ExperimentOrchestrator:
     def run_iteration(self, iteration: int, parameters: ParameterMatrix) -> None:
         """Execute forward model for all realizations in an iteration.
 
-        Args:
-            iteration: The current iteration number.
-            parameters: The parameter matrix to use for this iteration.
-
         Raises:
             ValueError: If the iteration number is negative.
         """
-
         if iteration < 0:
             msg = f"Iteration number must be >= 0, got: {iteration}"
             raise ValueError(msg)
@@ -357,14 +440,26 @@ class ExperimentOrchestrator:
         self._ensure_iteration_state(iteration)
         self._expected_realizations[iteration] = len(realizations)
 
+        skip_realizations = (
+            self._successful_realizations[iteration]
+            | self._failed_realizations[iteration]
+        )
+
         # Initialize all known realizations as PENDING via the callback
         if self._monitoring_callback:
             for r_id in sorted(realizations):
-                self._monitoring_callback(r_id, iteration, "PENDING", None)
+                if r_id not in skip_realizations:
+                    self._monitoring_callback(r_id, iteration, "PENDING", None)
 
         for r_id in sorted(realizations):
+            if r_id in skip_realizations:
+                continue
+            if self._pause_requested:
+                break
             job_id = self.evaluate_forward_model(r_id, iteration)
             self._active_jobs[iteration][r_id] = job_id
+
+        self._save_execution_state("RUNNING", iteration)
 
     def evaluate_forward_model(self, realization_id: int, iteration: int) -> str:
         """Submit the forward model for a single realization.
@@ -566,53 +661,54 @@ class ExperimentOrchestrator:
             real_df.write_parquet(workdir / target_name)
 
     async def _wait_for_iteration(self, iteration: int) -> None:
-        """Wait until all realizations in the iteration are final.
-
-        Args:
-            iteration: The iteration to wait for.
+        """Wait until all realizations in the iteration are final or paused.
 
         Raises:
-            TimeoutError: If the iteration does not complete within the timeout.
-            ValueError: If the iteration completes but some realizations failed.
+            ValueError: If the iteration finishes early or has failures.
         """
         if self._expected_realizations.get(iteration, 0) == 0:
             return
 
-        timeout = 120.0
-        try:
-            async with asyncio.timeout(timeout):
-                await self._iteration_events[iteration].wait()
-        except TimeoutError:
-            num_success = len(self._successful_realizations[iteration])
-            num_failed = len(self._failed_realizations[iteration])
-            num_total = self._expected_realizations[iteration]
-            missing = (
-                set(self._active_jobs[iteration].keys())
-                - self._successful_realizations[iteration]
-                - self._failed_realizations[iteration]
-            )
-            msg = (
-                f"Iteration {iteration} timed out after {timeout}s! "
-                f"Succeeded: {num_success}/{num_total}, "
-                f"Failed: {num_failed}, "
-                f"Missing: {sorted(missing)}"
-            )
-            logger.exception(msg)
-            # Log any logs we might have for the missing realizations to help debug
-            raise
+        # Replace hardcoded timeout with indefinitely waiting for completion or pause
+        tasks = [
+            asyncio.create_task(self._iteration_events[iteration].wait()),
+            asyncio.create_task(self._pause_event.wait()),
+        ]
 
-        # If we unblocked, check if it was due to failure
-        if self._failed_realizations[iteration]:
-            num_failed = len(self._failed_realizations[iteration])
+        _done, pending = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        for task in pending:
+            task.cancel()
+
+        if self._force_pause:
+            return
+
+        # If graceful pause, wait for remaining to finish
+        if self._pause_event.is_set() and not self._force_pause:
+            await self._iteration_events[iteration].wait()
+
+        # If not forcefully paused, check if there were failures
+        if not self._force_pause:
             num_success = len(self._successful_realizations[iteration])
-            num_total = self._expected_realizations[iteration]
-            msg = (
-                f"Iteration {iteration} failed: {num_failed} realizations failed. "
-                f"Succeeded: {num_success}/{num_total}. "
-                f"Failed IDs: {sorted(self._failed_realizations[iteration])}"
-            )
-            logger.error(msg)
-            raise ValueError(msg)
+            num_failed = len(self._failed_realizations[iteration])
+            num_total = self._expected_realizations.get(iteration, 0)
+
+            if num_success + num_failed < num_total:
+                msg = (
+                    f"Iteration {iteration} finished early. "
+                    f"{num_success}/{num_total} succeeded, {num_failed} failed."
+                )
+                raise ValueError(msg)
+
+            if num_failed > 0:
+                msg = (
+                    f"Iteration {iteration} failed: "
+                    f"{num_failed}/{num_total} realizations failed."
+                )
+                raise ValueError(msg)
 
     async def perform_update(self, iteration: int) -> pl.DataFrame:
         """Invoke the math plugin for the given iteration.
