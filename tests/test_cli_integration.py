@@ -1,10 +1,10 @@
 # ruff: noqa: S404, S603, PLW1510
 import json
-import shutil
 import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -12,12 +12,9 @@ import pytest
 
 
 @pytest.fixture
-def simple_example_dir(tmp_path: Path) -> Path:
+def simple_example_dir(copy_example: Callable[[str], Path]) -> Path:
     """Fixture to copy the simple example into a temporary directory."""
-    example_src = Path(__file__).parent.parent / "examples" / "simple"
-    dest = tmp_path / "simple"
-    shutil.copytree(example_src, dest)
-    return dest
+    return copy_example("simple")
 
 
 def get_free_port() -> int:
