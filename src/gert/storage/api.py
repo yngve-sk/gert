@@ -4,6 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
+from gert.experiments.models import ExecutionState, ExperimentConfig
 from gert.storage.consolidation import ConsolidationWorker
 
 
@@ -233,6 +234,26 @@ class StorageAPI:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"{step_name}.{log_type}"
         log_file.write_text(content, encoding="utf-8")
+
+    def write_experiment_config(self, config: ExperimentConfig) -> None:
+        """Write the experiment config to disk."""
+        exp_dir = self._base_storage_path / config.name
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        config_file = exp_dir / "config.json"
+        config_file.write_text(config.model_dump_json(indent=2))
+
+    def write_execution_state(
+        self,
+        experiment_name: str,
+        execution_id: str,
+        state_data: ExecutionState,
+    ) -> None:
+        """Write the orchestrator's execution state to disk."""
+        state_dir = self._base_storage_path / experiment_name / execution_id
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_file = state_dir / "execution_state.json"
+
+        state_file.write_text(state_data.model_dump_json(indent=2))
 
     async def consolidate(self, experiment_id: str, execution_id: str) -> None:
         """Manually trigger consolidation for an experiment/execution."""

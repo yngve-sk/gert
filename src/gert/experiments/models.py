@@ -370,6 +370,19 @@ class ExperimentConfig(BaseModel):
         return self
 
 
+class ExecutionState(BaseModel):
+    """Overall state of an experiment execution."""
+
+    experiment_id: str
+    execution_id: str
+    status: str
+    current_iteration: int = 0
+    active_job_ids: list[str] = Field(default_factory=list)
+    completed_realizations: list[int] = Field(default_factory=list)
+    failed_realizations: list[int] = Field(default_factory=list)
+    error: str | None = None
+
+
 class ResponsePayload(BaseModel):
     """Schema for simulated responses pushed back to GERT by forward models.
 

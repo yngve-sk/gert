@@ -1,10 +1,23 @@
 """Tests for the monitoring API."""
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
+from gert.experiments.models import (
+    ExecutionState,
+    ExperimentConfig,
+    ParameterMatrix,
+    QueueConfig,
+)
 from gert.server.gert_server import create_gert_server
-from gert.server.router import RealizationStatus, _experiment_statuses
+from gert.server.router import (
+    RealizationStatus,
+    _execution_states,
+    _executions_to_configs,
+    _experiment_statuses,
+)
 
 
 @pytest.fixture
@@ -23,6 +36,21 @@ def test_monitoring_api_get_status(test_client: TestClient) -> None:
         realization_id=realization_id,
         iteration=iteration,
         status="COMPLETED",
+    )
+
+    cfg = ExperimentConfig(
+        name="dummy",
+        base_working_directory=Path(),
+        forward_model_steps=[],
+        queue_config=QueueConfig(),
+        parameter_matrix=ParameterMatrix(),
+        observations=[],
+    )
+    _executions_to_configs[execution_id] = cfg
+    _execution_states[execution_id] = ExecutionState(
+        experiment_id="dummy",
+        execution_id=execution_id,
+        status="RUNNING",
     )
 
     # Note: We are testing the specific execution status endpoint here

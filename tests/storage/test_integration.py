@@ -30,7 +30,7 @@ async def test_storage_integration_blast(clean_storage: None) -> None:
     config_data = {
         "name": "blast-test",
         "base_working_directory": ".",
-        "forward_model_steps": [{"executable": "echo", "name": "e"}],
+        "forward_model_steps": [{"executable": "/bin/echo", "name": "e"}],
         "queue_config": {"backend": "local", "custom_attributes": {}},
         "parameter_matrix": {"metadata": {}, "values": {}, "datasets": []},
         "observations": [],
@@ -40,7 +40,11 @@ async def test_storage_integration_blast(clean_storage: None) -> None:
     experiment_id = response.json()["id"]
     # For storage tests, execution_id can be the same as experiment_id
     # but the API now requires both in the path.
-    execution_id = experiment_id
+
+    start_resp = client.post(f"/experiments/{experiment_id}/start")
+    assert start_resp.status_code == 200
+    execution_id = start_resp.json()["execution_id"]
+
     experiment_name = "blast-test"
 
     iteration = 0
@@ -97,7 +101,7 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
     config_data = {
         "name": "concurrent-blast-test",
         "base_working_directory": ".",
-        "forward_model_steps": [{"executable": "echo", "name": "e"}],
+        "forward_model_steps": [{"executable": "/bin/echo", "name": "e"}],
         "queue_config": {"backend": "local", "custom_attributes": {}},
         "parameter_matrix": {"metadata": {}, "values": {}, "datasets": []},
         "observations": [],
@@ -105,7 +109,11 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
     response = client.post("/experiments", json=config_data)
     assert response.status_code == 201
     experiment_id = response.json()["id"]
-    execution_id = experiment_id
+
+    start_resp = client.post(f"/experiments/{experiment_id}/start")
+    assert start_resp.status_code == 200
+    execution_id = start_resp.json()["execution_id"]
+
     experiment_name = "concurrent-blast-test"
 
     iteration = 0

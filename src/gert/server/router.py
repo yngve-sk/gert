@@ -6,6 +6,7 @@ import traceback
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -18,7 +19,11 @@ from fastapi import Path as FastApiPath
 from pydantic import BaseModel, Field
 
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
-from gert.experiments.models import ExperimentConfig, IngestionPayload
+from gert.experiments.models import (
+    ExecutionState,
+    ExperimentConfig,
+    IngestionPayload,
+)
 from gert.storage.api import StorageAPI
 from gert.storage.ingestion import IngestionReceiver
 
@@ -69,13 +74,6 @@ class ExperimentResponse(BaseModel):
     id: str = Field(..., description="The unique experiment ID.")
 
 
-class ExecutionState(BaseModel):
-    """Overall state of an experiment execution."""
-
-    status: str
-    error: str | None = None
-
-
 class CompletePayload(BaseModel):
     """Payload for signaling realization completion."""
 
@@ -105,6 +103,43 @@ _experiment_run_counts: dict[str, int] = defaultdict(int)
 _latest_execution_id: dict[str, str] = {}
 
 
+def _recover_execution(
+    experiment_id: str,
+    execution_id: str,
+) -> tuple[ExperimentConfig | None, ExecutionState | None]:
+    """Recover execution state from persistent storage if it's missing from memory."""
+    if execution_id in _executions_to_configs and execution_id in _execution_states:
+        return _executions_to_configs[execution_id], _execution_states[execution_id]
+
+    base = Path("./permanent_storage")
+    if not base.exists():
+        return None, None
+
+    for state_file in base.glob(f"*/{execution_id}/execution_state.json"):
+        try:
+            state = ExecutionState.model_validate_json(
+                state_file.read_text(),
+            )
+            if state.experiment_id == experiment_id:
+                # Load config from experiment level
+                config_file = state_file.parent.parent / "config.json"
+                if not config_file.exists():
+                    logger.error(f"Config file missing for experiment {experiment_id}")
+                    continue
+
+                config = ExperimentConfig.model_validate_json(config_file.read_text())
+
+                _experiment_configs[experiment_id] = config
+                _executions_to_configs[execution_id] = config
+                _execution_states[execution_id] = state
+                return config, state
+        except Exception:
+            logger.exception("Failed to load execution state")
+            continue
+
+    return None, None
+
+
 @router.post(
     "/experiments",
     status_code=status.HTTP_201_CREATED,
@@ -115,7 +150,149 @@ async def create_experiment(config: ExperimentConfig) -> ExperimentResponse:
     """Create a new experiment configuration."""
     experiment_id = uuid.uuid4().hex
     _experiment_configs[experiment_id] = config
+
+    # Save config to storage
+
+    api = StorageAPI(base_storage_path=config.storage_base)
+    api.write_experiment_config(config)
+
     return ExperimentResponse(id=experiment_id)
+
+
+@router.post(
+    "/experiments/{experiment_id}/executions/{execution_id}/pause",
+    summary="Pause an active execution",
+    description="Halts the orchestrator macro loop. "
+    "Graceful (waits until forward models finish) "
+    "by default, forceful if force=true.",
+)
+async def pause_execution(
+    experiment_id: str,
+    execution_id: str,
+    *,
+    force: bool = False,
+) -> dict[str, str]:
+    """Pause an active execution.
+
+    Raises:
+        HTTPException: if execution was not found.
+    """
+    config, state = _recover_execution(experiment_id, execution_id)
+    if not config or not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+
+    if orchestrator := _active_orchestrators.get(execution_id):
+        orchestrator.pause(force=force)
+    # If the orchestrator is not actively running in memory, it might already be dead
+    # We can update the state to PAUSED if it wasn't already.
+    elif state.status not in {"PAUSED", "COMPLETED", "FAILED"}:
+        state.status = "PAUSED"
+
+        api = StorageAPI(base_storage_path=config.storage_base)
+        api.write_execution_state(config.name, execution_id, state)
+
+    return {"status": "success"}
+
+
+@router.post(
+    "/experiments/{experiment_id}/executions/{execution_id}/resume",
+    summary="Resume a paused or crashed execution",
+    description="Reads the state from permanent storage and resumes the orchestrator.",
+)
+async def resume_execution(
+    experiment_id: str,
+    execution_id: str,
+) -> dict[str, str]:
+    """Resume a paused or crashed execution.
+
+    Raises:
+        HTTPException: if the resume request is invalid.
+    """
+    config, state = _recover_execution(experiment_id, execution_id)
+    if not config or not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+
+    if execution_id in _active_orchestrators:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Execution '{execution_id}' is already running",
+        )
+
+    if state.status in {"COMPLETED", "FAILED"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot resume execution '{execution_id}' in state {state.status}",
+        )
+
+    def _monitoring_cb(
+        realization_id: int,
+        iteration: int,
+        current_status: str,
+        step_name: str | None,
+    ) -> None:
+        _update_realization_status(
+            execution_id=execution_id,
+            iteration=iteration,
+            realization_id=realization_id,
+            new_status=current_status,
+            step_name=step_name,
+        )
+
+    api_url = "http://localhost:8000"
+
+    orchestrator = ExperimentOrchestrator(
+        config=config,
+        experiment_id=experiment_id,
+        run_count=1,  # Recovered execution keeps its ID from state
+        monitoring_callback=_monitoring_cb,
+        api_url=api_url,
+        resume_state=state,
+    )
+
+    _active_orchestrators[execution_id] = orchestrator
+    _execution_states[execution_id] = ExecutionState(
+        experiment_id=experiment_id,
+        execution_id=execution_id,
+        status="RUNNING",
+    )
+
+    async def _run_wrapped() -> None:
+        try:
+            await orchestrator.run_experiment()
+            if orchestrator.is_paused:
+                _execution_states[execution_id].status = (
+                    "PAUSED" if orchestrator.is_force_paused else "PAUSING"
+                )
+            else:
+                _execution_states[execution_id].status = "COMPLETED"
+        except Exception:
+            error_msg = traceback.format_exc()
+            _execution_states[execution_id].status = "FAILED"
+            _execution_states[execution_id].error = error_msg
+            logger.exception("Background execution failed")
+        finally:
+            _active_orchestrators.pop(execution_id, None)
+
+            # Flush execution state to disk so it stays updated
+            if execution_id in _execution_states:
+                api = StorageAPI(base_storage_path=config.storage_base)
+                api.write_execution_state(
+                    config.name,
+                    execution_id,
+                    _execution_states[execution_id],
+                )
+
+    task = asyncio.create_task(_run_wrapped())
+    _consolidation_tasks.add(task)
+    task.add_done_callback(_consolidation_tasks.discard)
+
+    return {"status": "success"}
 
 
 @router.get(
@@ -250,15 +427,25 @@ async def start_experiment(
     if execution_id not in _experiment_statuses:
         _experiment_statuses[execution_id] = defaultdict(dict)
 
-    _execution_states[execution_id] = ExecutionState(status="RUNNING")
+    _execution_states[execution_id] = ExecutionState(
+        experiment_id=experiment_id,
+        execution_id=execution_id,
+        status="RUNNING",
+    )
 
     async def _run_wrapped() -> None:
         try:
             await orchestrator.run_experiment()
-            _execution_states[execution_id] = ExecutionState(status="COMPLETED")
+            _execution_states[execution_id] = ExecutionState(
+                experiment_id=experiment_id,
+                execution_id=execution_id,
+                status="COMPLETED",
+            )
         except Exception:
             error_msg = traceback.format_exc()
             _execution_states[execution_id] = ExecutionState(
+                experiment_id=experiment_id,
+                execution_id=execution_id,
                 status="FAILED",
                 error=error_msg,
             )
@@ -293,13 +480,13 @@ async def get_execution_state(
     Raises:
         HTTPException: If the execution state is not found.
     """
-    _ = experiment_id
-    if execution_id not in _execution_states:
+    _, state = _recover_execution(experiment_id, execution_id)
+    if not state:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution '{execution_id}' state not found",
         )
-    return _execution_states[execution_id]
+    return state
 
 
 @router.get(
@@ -349,14 +536,15 @@ async def get_execution_status(
     Raises:
         HTTPException: If the execution is not found.
     """
-    _ = experiment_id  # Unused in current implementation
-    if execution_id not in _experiment_statuses:
-        if execution_id in _executions_to_configs:
-            return []
+    config, _ = _recover_execution(experiment_id, execution_id)
+    if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution '{execution_id}' not found",
         )
+
+    if execution_id not in _experiment_statuses:
+        return []
 
     all_statuses: list[RealizationStatus] = []
     for iter_dict in _experiment_statuses[execution_id].values():
@@ -370,13 +558,25 @@ async def get_execution_status(
     description="Signals that a realization has finished successfully.",
 )
 async def mark_realization_complete(
-    experiment_id: str,  # noqa: ARG001
+    experiment_id: str,
     execution_id: str,
     iteration: int,
     realization_id: int,
     payload: CompletePayload,
 ) -> dict[str, str]:
-    """Mark a realization as complete."""
+    """Mark a realization as complete.
+
+    Raises:
+        HTTPException: If the experiment or execution is not found.
+    """
+    config, _ = _recover_execution(experiment_id, execution_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' or execution "
+            f"'{execution_id}' not found",
+        )
+
     _update_realization_status(
         execution_id=execution_id,
         iteration=iteration,
@@ -399,13 +599,25 @@ async def mark_realization_complete(
     description="Signals that a realization has encountered an error.",
 )
 async def mark_realization_failed(
-    experiment_id: str,  # noqa: ARG001
+    experiment_id: str,
     execution_id: str,
     iteration: int,
     realization_id: int,
     payload: FailurePayload,
 ) -> dict[str, str]:
-    """Mark a realization as failed."""
+    """Mark a realization as failed.
+
+    Raises:
+        HTTPException: If the experiment or execution is not found.
+    """
+    config, _ = _recover_execution(experiment_id, execution_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' or execution "
+            f"'{execution_id}' not found",
+        )
+
     _update_realization_status(
         execution_id=execution_id,
         iteration=iteration,
@@ -527,7 +739,7 @@ async def get_step_logs(
     Raises:
         HTTPException: If the experiment or logs are not found.
     """
-    config = _experiment_configs.get(experiment_id)
+    config, _ = _recover_execution(experiment_id, execution_id)
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -577,13 +789,13 @@ async def ingest_data(
     Raises:
         HTTPException: If the experiment is not found.
     """
-    # Resolve experiment_id to config
-    config = _experiment_configs.get(experiment_id)
+    config, _ = _recover_execution(experiment_id, execution_id)
 
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Experiment '{experiment_id}' not found",
+            detail=f"Experiment '{experiment_id}' or execution "
+            f"'{execution_id}' not found",
         )
 
     receiver = IngestionReceiver(base_storage_path=config.storage_base)
@@ -611,7 +823,7 @@ async def get_parameters(
     Raises:
         HTTPException: If the experiment is not found.
     """
-    config = _experiment_configs.get(experiment_id)
+    config, _ = _recover_execution(experiment_id, execution_id)
 
     if not config:
         raise HTTPException(
@@ -650,13 +862,13 @@ async def get_responses(
     Raises:
         HTTPException: If the experiment or data is not found.
     """
-    # Resolve experiment_id to config
-    config = _experiment_configs.get(experiment_id)
+    config, _ = _recover_execution(experiment_id, execution_id)
 
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Experiment '{experiment_id}' not found",
+            detail=f"Experiment '{experiment_id}' or execution "
+            f"'{execution_id}' not found",
         )
 
     api = StorageAPI(base_storage_path=config.storage_base)

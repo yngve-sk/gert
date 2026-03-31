@@ -73,3 +73,15 @@ When a failure occurs deep within a mathematical plugin or during background job
         *   **Reason:** Matrix dimension mismatch between updated parameters and observations.
         *   **Traceback:** (Attached below for debugging)
 *   **CLI Surfacing:** The GERT CLI must poll the execution state and instantly surface these structured errors to the user's terminal, preventing the appearance of a "hung" process when the background has actually failed.
+
+---
+
+## 6. Execution Lifecycle Control (Pause, Resume, and Force Kill)
+
+**The Problem:**
+Users running large-scale HPC experiments might need to temporarily halt execution to free up compute resources, inspect intermediate mathematical updates, or prevent runaway costs. Additionally, if the server crashes (Section 3), it needs a structured way to "resume" an execution that was unceremoniously halted. Currently, stopping an experiment requires killing the server, and there is no way to resume.
+
+**Design Principles:**
+*   **Graceful Pause (`POST /experiments/{id}/executions/{id}/pause`):** By default, pausing an experiment should not kill running work. The orchestrator transitions its state to `PAUSING`. It stops submitting *new* forward models but continues to listen for `/complete` and `/fail` signals for currently active jobs. Once all active jobs resolve, the execution transitions to `PAUSED`, and the orchestrator loop exits cleanly.
+*   **Forceful Pause (`POST /experiments/{id}/executions/{id}/pause?force=true`):** If a user needs an immediate halt, the `force=true` query parameter instructs the orchestrator to transition immediately to `PAUSED`. The orchestrator must actively iterate through its list of active job IDs and invoke the job scheduler's cancellation mechanism (e.g., PSI/J cancel) before exiting the loop.
+*   **Resume (`POST /experiments/{id}/executions/{id}/resume`):** When resuming an execution (either from a `PAUSED` state or recovering from a crashed server), the orchestrator must dynamically evaluate its current iteration. It reads `config.json` and `execution_state.json` into memory. By comparing the expected realizations against the successfully ingested data and known failed jobs, it identifies which realizations are missing. It then submits *only* the missing realizations, transitions back to `RUNNING`, and re-enters the standard macro loop.
