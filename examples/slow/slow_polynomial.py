@@ -1,110 +1,50 @@
 #!/usr/bin/env python3
-# ruff: noqa: S311
 import argparse
 import json
-import random
-import sys
 import time
 from pathlib import Path
 
-import httpx
+from gert.plugins.forward_model_client import GertForwardModelClient
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="A slow polynomial forward model for GERT.",
-    )
-    parser.add_argument(
-        "--experiment-id",
-        required=True,
-        help="The GERT experiment ID",
-    )
-    parser.add_argument(
-        "--execution-id",
-        required=True,
-        help="The GERT execution ID",
-    )
-    parser.add_argument(
-        "--realization",
-        required=True,
-        type=int,
-        help="The realization number",
-    )
-    parser.add_argument(
-        "--iteration",
-        required=True,
-        type=int,
-        help="The iteration number",
-    )
-    parser.add_argument(
-        "--api-url",
-        default="http://localhost:8000",
-        help="Base URL of the GERT server",
-    )
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--experiment-id", required=True)
+    parser.add_argument("--execution-id", required=True)
+    parser.add_argument("--realization", type=int, required=True)
+    parser.add_argument("--iteration", type=int, required=True)
+    parser.add_argument("--api-url", default="http://localhost:8000")
     args = parser.parse_args()
 
-    # 1. Read input parameters from current workdir
-    param_file = Path("parameters.json")
-    if param_file.exists():
-        params = json.loads(param_file.read_text(encoding="utf-8"))
-        x = float(params.get("MULTFLT", 1.0))
-    else:
-        # Fallback for manual testing
-        print("[Slow Model] parameters.json not found, using realization x")
-        x = float(args.realization)
-
-    # Simulate a slow process (20-30 seconds total)
-    total_time = random.uniform(20.0, 30.0)
-    print(
-        f"[Slow Model] Realization {args.realization} running for {total_time:.2f}s...",
+    client = GertForwardModelClient(
+        api_url=args.api_url,
+        experiment_id=args.experiment_id,
+        execution_id=args.execution_id,
+        iteration=args.iteration,
+        realization_id=args.realization,
+        source_step="slow_polynomial",
     )
 
-    elapsed_time = 0.0
-    step = 0
-    ingest_url = (
-        f"{args.api_url}/experiments/{args.experiment_id}/executions/"
-        f"{args.execution_id}/ensembles/{args.iteration}/ingest"
-    )
+    with client.run():
+        # Sleep to simulate slow forward model
+        time.sleep(2.0)
 
-    while elapsed_time < total_time:
-        # Sleep for ~1 second with some jitter
-        step_sleep = random.uniform(0.8, 1.2)
-        if elapsed_time + step_sleep > total_time:
-            step_sleep = total_time - elapsed_time
-        time.sleep(step_sleep)
-        elapsed_time += step_sleep
-        step += 1
+        # 1. Read input parameters from current workdir
+        param_file = Path("parameters.json")
+        if param_file.exists():
+            params = json.loads(param_file.read_text(encoding="utf-8"))
+            x = float(params.get("MULTFLT", 1.0))
+        else:
+            x = float(args.realization)
 
-        # Simulate a polynomial model evolving over time
-        computed_value = float(x**2 + 10 + step)
+        # Execute the "Math" (y = x^2 + 10)
+        computed_value = float(x**2 + 10)
 
-        payload = {
-            "realization": args.realization,
-            "source_step": "slow_polynomial",
-            "key": {"response": "FOPR", "step": str(step)},
-            "value": computed_value,
-        }
-
-        print(
-            f"[Slow Model] Realization {args.realization} (step {step}) "
-            f"computed FOPR = {computed_value}. Sending to {args.api_url}...",
+        # 3. Ingest results via SDK
+        client.post_response(
+            key={"response": "FOPR"},
+            value=computed_value,
         )
-
-        try:
-            response = httpx.post(ingest_url, json=payload)
-            response.raise_for_status()
-            print(
-                f"[Slow Model] Realization {args.realization} step {step} "
-                "successfully ingested.",
-            )
-        except httpx.HTTPError as e:
-            print(
-                f"[Slow Model] Realization {args.realization} failed to "
-                f"ingest step {step}: {e}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
 
 
 if __name__ == "__main__":

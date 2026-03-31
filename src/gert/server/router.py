@@ -76,6 +76,20 @@ class ExecutionState(BaseModel):
     error: str | None = None
 
 
+class CompletePayload(BaseModel):
+    """Payload for signaling realization completion."""
+
+    source_step: str | None = None
+
+
+class FailurePayload(BaseModel):
+    """Payload for signaling realization failure."""
+
+    source_step: str | None = None
+    error: str
+    traceback: str | None = None
+
+
 # In-memory storage for experiment configurations (Mocked storage)
 # In PR 2.1, this should move to a more persistent storage backend.
 _experiment_configs: dict[str, ExperimentConfig] = {}
@@ -85,6 +99,7 @@ _experiment_statuses: dict[
     dict[int, dict[int, RealizationStatus]],
 ] = defaultdict(lambda: defaultdict(dict))
 _execution_states: dict[str, ExecutionState] = {}
+_active_orchestrators: dict[str, "ExperimentOrchestrator"] = {}
 _consolidation_tasks: set[asyncio.Task[Any]] = set()
 _experiment_run_counts: dict[str, int] = defaultdict(int)
 _latest_execution_id: dict[str, str] = {}
@@ -203,32 +218,13 @@ async def start_experiment(
         step_name: str | None = None,
     ) -> None:
         exec_id = execution_id_ref["id"]
-        # Use (iteration, realization_id) as the key to support multi-step workflows
-        state = _experiment_statuses[exec_id][iteration].get(realization_id)
-        if not state:
-            state = RealizationStatus(
-                realization_id=realization_id,
-                iteration=iteration,
-                status=current_status,
-            )
-            _experiment_statuses[exec_id][iteration][realization_id] = state
-
-        if step_name:
-            # Update specific step status
-            step = next((s for s in state.steps if s.name == step_name), None)
-            if not step:
-                step = StepStatus(name=step_name, status=current_status)
-                state.steps.append(step)
-
-            step.status = current_status
-            if current_status == "RUNNING" and not step.start_time:
-                step.start_time = datetime.now(tz=UTC)
-            elif current_status in {"COMPLETED", "FAILED"}:
-                step.end_time = datetime.now(tz=UTC)
-
-        else:
-            # Update overall realization status
-            state.status = current_status
+        _update_realization_status(
+            execution_id=exec_id,
+            iteration=iteration,
+            realization_id=realization_id,
+            new_status=current_status,
+            step_name=step_name,
+        )
 
     _experiment_run_counts[experiment_id] += 1
 
@@ -249,6 +245,10 @@ async def start_experiment(
     execution_id_ref["id"] = execution_id
     _executions_to_configs[execution_id] = config
     _latest_execution_id[experiment_id] = execution_id
+    _active_orchestrators[execution_id] = orchestrator
+    # Explicitly initialize status storage for this execution
+    if execution_id not in _experiment_statuses:
+        _experiment_statuses[execution_id] = defaultdict(dict)
 
     _execution_states[execution_id] = ExecutionState(status="RUNNING")
 
@@ -264,6 +264,8 @@ async def start_experiment(
             )
             # Make sure it gets printed on the server side as well
             logger.exception("Background execution failed")
+        finally:
+            _active_orchestrators.pop(execution_id, None)
 
     # 1. Execute the orchestrator loop strictly in the background (Fire and Forget)
     task = asyncio.create_task(_run_wrapped())
@@ -360,6 +362,102 @@ async def get_execution_status(
     for iter_dict in _experiment_statuses[execution_id].values():
         all_statuses.extend(iter_dict.values())
     return all_statuses
+
+
+@router.post(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/realizations/{realization_id}/complete",
+    summary="Mark realization as complete",
+    description="Signals that a realization has finished successfully.",
+)
+async def mark_realization_complete(
+    experiment_id: str,  # noqa: ARG001
+    execution_id: str,
+    iteration: int,
+    realization_id: int,
+    payload: CompletePayload,
+) -> dict[str, str]:
+    """Mark a realization as complete."""
+    _update_realization_status(
+        execution_id=execution_id,
+        iteration=iteration,
+        realization_id=realization_id,
+        new_status="COMPLETED",
+        step_name=payload.source_step,
+    )
+    if orchestrator := _active_orchestrators.get(execution_id):
+        await orchestrator.record_realization_complete(
+            iteration,
+            realization_id,
+            payload.source_step,
+        )
+    return {"status": "success"}
+
+
+@router.post(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/realizations/{realization_id}/fail",
+    summary="Mark realization as failed",
+    description="Signals that a realization has encountered an error.",
+)
+async def mark_realization_failed(
+    experiment_id: str,  # noqa: ARG001
+    execution_id: str,
+    iteration: int,
+    realization_id: int,
+    payload: FailurePayload,
+) -> dict[str, str]:
+    """Mark a realization as failed."""
+    _update_realization_status(
+        execution_id=execution_id,
+        iteration=iteration,
+        realization_id=realization_id,
+        new_status="FAILED",
+        step_name=payload.source_step,
+    )
+    if orchestrator := _active_orchestrators.get(execution_id):
+        await orchestrator.record_realization_fail(
+            iteration,
+            realization_id,
+            payload.source_step,
+        )
+    # TODO(@yngves.kristiansen, #0): In Section 5, store payload.error and  # noqa: FIX002, E501
+    # payload.traceback for user inspection
+    return {"status": "success"}
+
+
+def _update_realization_status(
+    execution_id: str,
+    iteration: int,
+    realization_id: int,
+    new_status: str,
+    step_name: str | None = None,
+) -> None:
+    """Helper to update the in-memory status of a realization."""
+    if execution_id not in _experiment_statuses:
+        # We might want to initialize it if we know the config exists,
+        # but for now we follow existing patterns.
+        return
+
+    state = _experiment_statuses[execution_id][iteration].get(realization_id)
+    if not state:
+        state = RealizationStatus(
+            realization_id=realization_id,
+            iteration=iteration,
+            status=new_status,
+        )
+        _experiment_statuses[execution_id][iteration][realization_id] = state
+
+    if step_name:
+        step = next((s for s in state.steps if s.name == step_name), None)
+        if not step:
+            step = StepStatus(name=step_name, status=new_status)
+            state.steps.append(step)
+        step.status = new_status
+        if new_status == "RUNNING" and not step.start_time:
+            step.start_time = datetime.now(tz=UTC)
+        elif new_status in {"COMPLETED", "FAILED"}:
+            step.end_time = datetime.now(tz=UTC)
+    else:
+        state.status = new_status
 
 
 @router.post(

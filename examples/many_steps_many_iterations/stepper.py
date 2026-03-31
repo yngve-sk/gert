@@ -1,103 +1,57 @@
 #!/usr/bin/env python3
 import argparse
-import contextlib
 import json
-import sys
 import time
 from pathlib import Path
 
-import httpx
+from gert.plugins.forward_model_client import GertForwardModelClient
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="A generic step-model for GERT.",
-    )
-    parser.add_argument(
-        "--step-name",
-        required=True,
-        help="The name of this step",
-    )
-    parser.add_argument(
-        "--experiment-id",
-        required=True,
-        help="The GERT experiment ID",
-    )
-    parser.add_argument(
-        "--execution-id",
-        required=True,
-        help="The GERT execution ID",
-    )
-    parser.add_argument(
-        "--realization",
-        required=True,
-        type=int,
-        help="The realization number",
-    )
-    parser.add_argument(
-        "--iteration",
-        required=True,
-        type=int,
-        help="The iteration number",
-    )
-    parser.add_argument(
-        "--api-url",
-        default="http://localhost:8000",
-        help="Base URL of the GERT server",
-    )
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--experiment-id", required=True)
+    parser.add_argument("--execution-id", required=True)
+    parser.add_argument("--realization", type=int, required=True)
+    parser.add_argument("--iteration", type=int, required=True)
+    parser.add_argument("--step-name", required=True)
+    parser.add_argument("--api-url", default="http://localhost:8000")
     args = parser.parse_args()
 
-    print(
-        f"[{args.step_name}] Starting realization {args.realization} "
-        f"iteration {args.iteration}",
-    )
-    print(f"[{args.step_name}] Initializing...", file=sys.stderr)
-    print(f"[{args.step_name}] API URL: {args.api_url}")
-
-    # Simulate work (0.5 seconds)
-    print(f"[{args.step_name}] Computing partial results...")
-    time.sleep(0.5)
-    print(f"[{args.step_name}] Heavy lifting in progress...", file=sys.stderr)
-
-    # Read input parameters from current workdir
-    param_file = Path("parameters.json")
-    x = 1.0
-    if param_file.exists():
-        params = json.loads(param_file.read_text(encoding="utf-8"))
-        x = float(params.get("MULTFLT", 1.0))
-
-    # Emit a response specific to this step.
-    # The value is calculated using x, step_index and iteration.
-    step_index = 0
-    if args.step_name.startswith("step_"):
-        with contextlib.suppress(ValueError, IndexError):
-            step_index = int(args.step_name.split("_")[1])
-
-    computed_value = float(x * (step_index + 1) + args.iteration)
-
-    payload = {
-        "realization": args.realization,
-        "source_step": args.step_name,
-        "key": {"response": f"R_{args.step_name}"},
-        "value": computed_value,
-    }
-
-    ingest_url = (
-        f"{args.api_url}/experiments/{args.experiment_id}/executions/"
-        f"{args.execution_id}/ensembles/{args.iteration}/ingest"
+    client = GertForwardModelClient(
+        api_url=args.api_url,
+        experiment_id=args.experiment_id,
+        execution_id=args.execution_id,
+        iteration=args.iteration,
+        realization_id=args.realization,
+        source_step=args.step_name,
     )
 
-    try:
-        response = httpx.post(ingest_url, json=payload)
-        response.raise_for_status()
-        print(f"[{args.step_name}] Successfully ingested response: {computed_value}")
-    except httpx.HTTPError as e:
-        print(
-            f"[{args.step_name}] Realization {args.realization} failed to ingest: {e}",
-            file=sys.stderr,
+    with client.run():
+        # Sleep to simulate forward model step
+        time.sleep(0.5)
+
+        # 1. Read input parameters from current workdir
+        param_file = Path("parameters.json")
+        if param_file.exists():
+            params = json.loads(param_file.read_text(encoding="utf-8"))
+            x = float(params.get("MULTFLT", 1.0))
+        else:
+            x = float(args.realization)
+
+        # Execute the "Math" (y = x + iteration + realization + step_index)
+        # Extract numeric index from step-1, step-2...
+        try:
+            step_idx = int(args.step_name.split("-")[-1])
+        except ValueError:
+            step_idx = 0
+
+        computed_value = float(x + args.iteration + args.realization + step_idx)
+
+        # 3. Ingest results via SDK
+        client.post_response(
+            key={"response": f"R-{args.step_name}"},
+            value=computed_value,
         )
-        sys.exit(1)
 
 
 if __name__ == "__main__":

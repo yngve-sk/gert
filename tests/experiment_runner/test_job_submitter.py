@@ -77,11 +77,16 @@ class TestJobSubmitter:
             ],
         )
 
-        # Wait for job completion
-        assert await self._wait_for_condition(output_file.exists)
+        def all_steps_done() -> bool:
+            if not output_file.exists():
+                return False
+            content = output_file.read_text().strip().split("\n")
+            return len(content) == 3
+
+        # Wait for all commands to finish writing
+        assert await self._wait_for_condition(all_steps_done)
 
         assert isinstance(job_id, str)
-        assert output_file.exists()
 
         content = output_file.read_text().strip().split("\n")
         assert content == ["Step 1", "Step 2", "Step 3"]

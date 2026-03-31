@@ -82,7 +82,7 @@ This module exposes the internal modules as network services and manages their e
 
 ---
 
-## 7. `gert.client` (External Interfaces)
+## 7. `gert.plugins.client` (External Interfaces)
 The tools used by users or higher-level systems (like Everest) to interact with the server.
 
 * **`ConnectionDiscovery`**: Reads the `chmod 600` `connection.json` file to configure network hosts, ports, and Bearer tokens.
@@ -125,6 +125,6 @@ Single Source of Truth for Models
 
 The Pydantic models in src/gert/experiments/models.py serve as the absolute single source of truth for both the backend and frontend environments:
 
-For Python Clients (Backend/CLI): Internal server modules and external Python clients (like Everest or the CLI in gert.client) simply import these models natively (from gert.experiments.models import ExperimentConfig).
+For Python Clients (Backend/CLI): Internal server modules and external Python clients (like Everest or the CLI in gert.plugins.client) simply import these models natively (from gert.experiments.models import ExperimentConfig).
 
 For Web Frontends (UI): There is no need to manually rewrite these data structures in JavaScript/TypeScript. The FastAPI backend (gert.server) automatically reads the Pydantic models and generates a live OpenAPI (Swagger) JSON schema. Web frontends use tools like openapi-typescript-codegen to automatically generate perfectly typed frontend interfaces directly from this schema.

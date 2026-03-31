@@ -132,8 +132,16 @@ class ExperimentOrchestrator:
 
         # Track active jobs per iteration: {iteration: {realization_id: job_id}}
         self._active_jobs: dict[int, dict[int, str]] = defaultdict(dict)
-        # Track completed jobs: {iteration: set(realization_id)}
-        self._completed_realizations: dict[int, set[int]] = defaultdict(set)
+        # Track realization outcomes
+        self._successful_realizations: dict[int, set[int]] = defaultdict(set)
+        self._failed_realizations: dict[int, set[int]] = defaultdict(set)
+        # Track individual step outcomes: {iteration: {realization_id: set(step_name)}}
+        self._successful_steps: dict[int, dict[int, set[str]]] = defaultdict(
+            lambda: defaultdict(set),
+        )
+        self._failed_steps: dict[int, dict[int, set[str]]] = defaultdict(
+            lambda: defaultdict(set),
+        )
         # Track expected number of realizations per iteration
         self._expected_realizations: dict[int, int] = {}
         # Completion event per iteration
@@ -145,12 +153,100 @@ class ExperimentOrchestrator:
             self._iteration_events[iteration] = asyncio.Event()
         if iteration not in self._expected_realizations:
             self._expected_realizations[iteration] = 0
-        # defaultdict handles _active_jobs and _completed_realizations
+        # defaultdict handles other tracking structures
 
     @property
     def execution_id(self) -> str:
         """Get the universally unique execution ID for this orchestrator instance."""
         return self._execution_id
+
+    async def record_realization_complete(
+        self,
+        iteration: int,
+        realization_id: int,
+        step_name: str | None = None,
+    ) -> None:
+        """Record that a realization or a specific step has completed successfully."""
+        # If it already failed (e.g. via PSI/J supervisor), don't mark it successful
+        if realization_id in self._failed_realizations[iteration]:
+            return
+
+        if step_name:
+            logger.debug(
+                f"Step '{step_name}' completed for realization {realization_id} "
+                f"(iteration {iteration})",
+            )
+            self._successful_steps[iteration][realization_id].add(step_name)
+            if self._monitoring_callback:
+                self._monitoring_callback(
+                    realization_id,
+                    iteration,
+                    "COMPLETED",
+                    step_name,
+                )
+
+        # A realization is complete only if ALL expected steps are successful
+        expected_steps = {s.name for s in self._config.forward_model_steps}
+        if (
+            expected_steps.issubset(self._successful_steps[iteration][realization_id])
+            and realization_id not in self._successful_realizations[iteration]
+        ):
+            msg = (
+                f"Realization {realization_id} fully completed (iteration {iteration})"
+            )
+            logger.info(msg)
+            self._successful_realizations[iteration].add(realization_id)
+            if self._monitoring_callback:
+                self._monitoring_callback(realization_id, iteration, "COMPLETED", None)
+
+        await self._check_iteration_complete(iteration)
+
+    async def record_realization_fail(
+        self,
+        iteration: int,
+        realization_id: int,
+        step_name: str | None = None,
+    ) -> None:
+        """Record that a realization or a specific step has failed."""
+        if step_name:
+            logger.error(
+                f"Step '{step_name}' failed for realization {realization_id} "
+                f"(iteration {iteration})",
+            )
+            self._failed_steps[iteration][realization_id].add(step_name)
+            if self._monitoring_callback:
+                self._monitoring_callback(
+                    realization_id,
+                    iteration,
+                    "FAILED",
+                    step_name,
+                )
+
+        # ANY step failure fails the whole realization
+        if realization_id not in self._failed_realizations[iteration]:
+            self._failed_realizations[iteration].add(realization_id)
+            # Ensure it is removed from successful if it was previously there
+            self._successful_realizations[iteration].discard(realization_id)
+
+            if self._monitoring_callback:
+                self._monitoring_callback(realization_id, iteration, "FAILED", None)
+
+        await self._check_iteration_complete(iteration)
+
+    async def _check_iteration_complete(self, iteration: int) -> None:
+        """Check if the iteration is finished (all done or any failed)."""
+        num_accounted = len(self._successful_realizations[iteration]) + len(
+            self._failed_realizations[iteration],
+        )
+        all_done = num_accounted == self._expected_realizations[iteration]
+        any_failed = len(self._failed_realizations[iteration]) > 0
+
+        if all_done or any_failed:
+            # Yield control briefly to ensure monitoring/polling has a chance
+            # to see the final statuses before the orchestrator unblocks
+            # and potentially moves to the next iteration.
+            await asyncio.sleep(0.1)
+            self._iteration_events[iteration].set()
 
     async def run_experiment(self) -> None:
         """Execute the full macro iteration loop (N+1 iterations)."""
@@ -408,12 +504,17 @@ class ExperimentOrchestrator:
                         "stderr",
                     )
 
-                self._completed_realizations[iteration].add(realization_id)
-                if (
-                    len(self._completed_realizations[iteration])
-                    == self._expected_realizations[iteration]
-                ):
-                    loop.call_soon_threadsafe(self._iteration_events[iteration].set)
+                # Track outcome from scheduler (primary role: catch failures)
+                if status.state in {
+                    psij.JobState.FAILED,
+                    psij.JobState.CANCELED,
+                }:
+                    asyncio.run_coroutine_threadsafe(
+                        self.record_realization_fail(iteration, realization_id),
+                        loop,
+                    )  # Note: psij.JobState.COMPLETED is intentionally ignored here.
+                # We wait for the SDK to call the /complete HTTP endpoint
+                # to guarantee that all data ingestion is finished.
 
             if self._monitoring_callback:
                 loop.call_soon_threadsafe(
@@ -472,6 +573,7 @@ class ExperimentOrchestrator:
 
         Raises:
             TimeoutError: If the iteration does not complete within the timeout.
+            ValueError: If the iteration completes but some realizations failed.
         """
         if self._expected_realizations.get(iteration, 0) == 0:
             return
@@ -481,20 +583,36 @@ class ExperimentOrchestrator:
             async with asyncio.timeout(timeout):
                 await self._iteration_events[iteration].wait()
         except TimeoutError:
-            num_completed = len(self._completed_realizations[iteration])
+            num_success = len(self._successful_realizations[iteration])
+            num_failed = len(self._failed_realizations[iteration])
             num_total = self._expected_realizations[iteration]
             missing = (
                 set(self._active_jobs[iteration].keys())
-                - self._completed_realizations[iteration]
+                - self._successful_realizations[iteration]
+                - self._failed_realizations[iteration]
             )
             msg = (
                 f"Iteration {iteration} timed out after {timeout}s! "
-                f"Completed: {num_completed}/{num_total}. "
-                f"Missing realizations: {sorted(missing)}"
+                f"Succeeded: {num_success}/{num_total}, "
+                f"Failed: {num_failed}, "
+                f"Missing: {sorted(missing)}"
             )
             logger.exception(msg)
             # Log any logs we might have for the missing realizations to help debug
             raise
+
+        # If we unblocked, check if it was due to failure
+        if self._failed_realizations[iteration]:
+            num_failed = len(self._failed_realizations[iteration])
+            num_success = len(self._successful_realizations[iteration])
+            num_total = self._expected_realizations[iteration]
+            msg = (
+                f"Iteration {iteration} failed: {num_failed} realizations failed. "
+                f"Succeeded: {num_success}/{num_total}. "
+                f"Failed IDs: {sorted(self._failed_realizations[iteration])}"
+            )
+            logger.error(msg)
+            raise ValueError(msg)
 
     async def perform_update(self, iteration: int) -> pl.DataFrame:
         """Invoke the math plugin for the given iteration.
@@ -512,6 +630,12 @@ class ExperimentOrchestrator:
         # 0. Ensure data is consolidated before fetching
         logger.info(f"Performing mathematical update for iteration {iteration}")
         await self._storage_api.consolidate(self._config.name, self._execution_id)
+        # Force flush the current iteration specifically to ensure everything is drained
+        await self._storage_api.flush(
+            self._config.name,
+            self._execution_id,
+            iteration,
+        )
 
         # 1. Fetch data from storage
         # current_parameters (from storage for this iteration)
