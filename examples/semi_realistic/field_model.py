@@ -3,8 +3,9 @@ import argparse
 import time
 from pathlib import Path
 
-import httpx
 import polars as pl
+
+from gert.plugins.forward_model_client import GertForwardModelClient
 
 
 def main() -> None:
@@ -17,68 +18,66 @@ def main() -> None:
     parser.add_argument("--api-url", default="http://localhost:8000")
     args = parser.parse_args()
 
-    # Sleep to simulate a slower forward model
-    time.sleep(0.5)
-
-    # 1. Read field data
-    # Orchestrator injects ParameterDataset as field_data_0.parquet
-    field_file = Path("field_data_0.parquet")
-    if not field_file.exists():
-        print(f"Error: {field_file} not found")
-        return
-
-    df = pl.read_parquet(field_file)
-
-    # 2. Simulate "physics"
-    # Wells at (2,2) and (7,7)
-    wells = {"W1": (2, 2), "W2": (7, 7)}
-
-    results = []
-    for w_name, (wx, wy) in wells.items():
-        # Calculate base influence from all cells
-        # We simplify: influence is PERM * exp(-dist/3)
-        influence = (
-            df.with_columns(
-                [
-                    (((pl.col("i") - wx) ** 2 + (pl.col("j") - wy) ** 2) ** 0.5).alias(
-                        "dist",
-                    ),
-                ],
-            )
-            .with_columns(
-                [(pl.col("PERM") * ((-pl.col("dist") / 3.0).exp())).alias("weighted")],
-            )
-            .select(pl.col("weighted").sum())
-            .to_series()[0]
-        )
-
-        t = args.step_time
-        val = float(influence * (1.0 + 0.1 * t))
-        results.append(
-            {
-                "realization": args.realization,
-                "source_step": f"field_model_{t}",
-                "key": {"well": w_name, "time": str(t)},
-                "value": val,
-            },
-        )
-
-    # 3. Ingest results
-    ingest_url = (
-        f"{args.api_url}/experiments/{args.experiment_id}/executions/"
-        f"{args.execution_id}/ensembles/{args.iteration}/ingest"
+    client = GertForwardModelClient(
+        api_url=args.api_url,
+        experiment_id=args.experiment_id,
+        execution_id=args.execution_id,
+        iteration=args.iteration,
+        realization_id=args.realization,
+        source_step=f"field_model_{args.step_time}",
     )
 
-    for payload in results:
-        try:
-            resp = httpx.post(ingest_url, json=payload)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            print(f"Failed to ingest {payload['key']}: {e}")
-        except httpx.RequestError as e:
-            print(f"Network error ingesting {payload['key']}: {e}")
+    with client.run():
+        # Sleep to simulate a slower forward model
+        time.sleep(0.5)
 
-    print(f"Successfully simulated and ingested W1, W2 for t={args.step_time}")
+        # 1. Read field data
+        # Orchestrator injects ParameterDataset as field_data_0.parquet
+        field_file = Path("field_data_0.parquet")
+        if not field_file.exists():
+            msg = f"{field_file} not found"
+            raise FileNotFoundError(msg)
+
+        df = pl.read_parquet(field_file)
+
+        # 2. Simulate "physics"
+        # Wells at (2,2) and (7,7)
+        wells = {"W1": (2, 2), "W2": (7, 7)}
+
+        for w_name, (wx, wy) in wells.items():
+            # Calculate base influence from all cells
+            # We simplify: influence is PERM * exp(-dist/3)
+            influence = (
+                df.with_columns(
+                    [
+                        (
+                            ((pl.col("i") - wx) ** 2 + (pl.col("j") - wy) ** 2) ** 0.5
+                        ).alias(
+                            "dist",
+                        ),
+                    ],
+                )
+                .with_columns(
+                    [
+                        (pl.col("PERM") * ((-pl.col("dist") / 3.0).exp())).alias(
+                            "weighted",
+                        ),
+                    ],
+                )
+                .select(pl.col("weighted").sum())
+                .to_series()[0]
+            )
+
+            t = args.step_time
+            val = float(influence * (1.0 + 0.1 * t))
+
+            # 3. Ingest results via SDK
+            client.post_response(
+                key={"well": w_name, "time": str(t)},
+                value=val,
+            )
+
+        print(f"Successfully simulated and ingested W1, W2 for t={args.step_time}")
 
 
 if __name__ == "__main__":
