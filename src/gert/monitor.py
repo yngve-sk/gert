@@ -8,11 +8,51 @@ from datetime import datetime
 from typing import Any, ClassVar
 from urllib.error import URLError
 
+from pydantic import BaseModel, ConfigDict, Field
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Footer, Header, Label, ProgressBar, Static, Tree
 from textual.widgets.tree import TreeNode
+
+
+class StepState(BaseModel):
+    """State of an individual forward model step."""
+
+    name: str
+    status: str
+    start_time: str | datetime | None = None
+    end_time: str | datetime | None = None
+
+
+class RealizationState(BaseModel):
+    """State of a specific realization execution including its steps."""
+
+    realization_id: int
+    iteration: int
+    status: str
+    steps: list[StepState] = Field(default_factory=list)
+
+
+class ResponseItem(BaseModel):
+    """A single emitted response from a forward model."""
+
+    model_config = ConfigDict(extra="allow")
+
+    realization: int | None = None
+    source_step: str | None = None
+    value: Any | None = None
+    type: str | None = None
+
+
+class IterationCount(BaseModel):
+    """Progress counting for an iteration."""
+
+    total: int = 0
+    done: int = 0
+    total_steps: int = 0
+    done_steps: int = 0
+    total_responses: int = 0
 
 
 class ResponseViewer(Static):
@@ -90,8 +130,8 @@ class GertMonitorApp(App[None]):
     status_url: str
     responses_url: str | None
 
-    _statuses: dict[tuple[int, int], dict[str, Any]]
-    _responses: dict[tuple[int, int], list[dict[str, Any]]]
+    _statuses: dict[tuple[int, int], RealizationState]
+    _responses: dict[int, dict[int, list[ResponseItem]]]
     _iteration_nodes: dict[int, TreeNode[NodeData | None]]
     _realization_nodes: dict[tuple[int, int], TreeNode[NodeData | None]]
     _step_nodes: dict[tuple[int, int, str], TreeNode[NodeData | None]]
@@ -205,7 +245,7 @@ class GertMonitorApp(App[None]):
         self.responses_url = None
 
         self._statuses = {}
-        self._responses = defaultdict(list)
+        self._responses = {}
         self._iteration_nodes = {}
         self._realization_nodes = {}
         self._step_nodes = {}
@@ -306,16 +346,18 @@ class GertMonitorApp(App[None]):
         """Cleanup any remaining threads on unmount."""
         self._exiting = True
 
-    def _format_time(self, time_str: str | None) -> str:
+    def _format_time(self, time_val: str | datetime | None) -> str:
         """Format a ISO timestamp into a human-readable string."""
-        if not time_str:
+        if not time_val:
             return "N/A"
+        if isinstance(time_val, datetime):
+            return time_val.strftime("%H:%M:%S")
         try:
             # Pydantic/FastAPI sends ISO format
-            dt = datetime.fromisoformat(time_str)
+            dt = datetime.fromisoformat(time_val)
             return dt.strftime("%H:%M:%S")  # Just time for brevity in one-liner
         except (ValueError, TypeError):
-            return str(time_str)
+            return str(time_val)
 
     def _get_status_emoji(self, status: str) -> str:
         """Get an emoji representing the status."""
@@ -334,13 +376,13 @@ class GertMonitorApp(App[None]):
         it: int,
         r_id: int,
         step_name: str,
-        step: dict[str, Any] | None,
+        step: StepState | None,
     ) -> str:
         """Create a nice one-liner summary for a step."""
-        st = step["status"] if step else "UNKNOWN"
+        st = step.status if step else "UNKNOWN"
         emoji = self._get_status_emoji(st)
-        start = self._format_time(step.get("start_time")) if step else "N/A"
-        end = self._format_time(step.get("end_time")) if step else "N/A"
+        start = self._format_time(step.start_time) if step else "N/A"
+        end = self._format_time(step.end_time) if step else "N/A"
 
         return (
             f"{ICON_FM} [bold blue]{step_name}[/] (It {it}, R {r_id}) | "
@@ -359,7 +401,7 @@ class GertMonitorApp(App[None]):
                     if self.expected_count is not None:
                         total_expected = self.expected_count * self.num_iterations
                         if len(self._statuses) >= total_expected and all(
-                            s["status"] in {"COMPLETED", "FAILED"}
+                            s.status in {"COMPLETED", "FAILED"}
                             for s in self._statuses.values()
                         ):
                             return True
@@ -402,24 +444,25 @@ class GertMonitorApp(App[None]):
 
     def process_data(self, data: list[dict[str, Any]]) -> None:
         """Process API data and update UI components on the main thread."""
+        parsed_data = [RealizationState.model_validate(item) for item in data]
         state_counts: dict[str, int] = defaultdict(int)
 
         # Precompute num_fm_steps from data if _fetch_config hasn't finished
-        if self._num_fm_steps == 0 and data:
+        if self._num_fm_steps == 0 and parsed_data:
             self._num_fm_steps = max(
-                (len(item.get("steps", [])) for item in data),
+                (len(item.steps) for item in parsed_data),
                 default=0,
             )
 
-        iter_counts = self._init_iter_counts(data)
+        iter_counts = self._init_iter_counts(parsed_data)
         tree = self.query_one("#tree-view", NavigationTree)
 
         # First pass: update all realizations and aggregate counts
-        for item in data:
-            r_id = item["realization_id"]
-            it = item["iteration"]
-            st = item["status"]
-            steps = item.get("steps", [])
+        for item in parsed_data:
+            r_id = item.realization_id
+            it = item.iteration
+            st = item.status
+            steps = item.steps
 
             if it not in iter_counts:
                 continue
@@ -428,14 +471,14 @@ class GertMonitorApp(App[None]):
             state_counts[st] += 1
 
             if st in {"COMPLETED", "FAILED"}:
-                iter_counts[it]["done"] += 1
+                iter_counts[it].done += 1
 
             for step in steps:
-                if step["status"] in {"COMPLETED", "FAILED"}:
-                    iter_counts[it]["done_steps"] += 1
+                if step.status in {"COMPLETED", "FAILED"}:
+                    iter_counts[it].done_steps += 1
 
-            iter_counts[it]["total_responses"] += len(
-                self._responses.get((it, r_id), []),
+            iter_counts[it].total_responses += len(
+                self._responses.get(it, {}).get(r_id, []),
             )
             self._update_realization_node(tree, it, r_id, st, steps)
 
@@ -446,39 +489,39 @@ class GertMonitorApp(App[None]):
 
     def _init_iter_counts(
         self,
-        data: list[dict[str, Any]],
-    ) -> dict[int, dict[str, int]]:
+        data: list[RealizationState],
+    ) -> dict[int, IterationCount]:
         """Pre-initialize counts with planned totals."""
 
-        iter_counts: dict[int, dict[str, int]] = {}
+        iter_counts: dict[int, IterationCount] = {}
         for i in range(self.num_iterations):
             planned_r = self.expected_count or 0
             if not planned_r and data:
                 # Fallback discovery
                 planned_r = len(
-                    {item["realization_id"] for item in data if item["iteration"] == i},
+                    {item.realization_id for item in data if item.iteration == i},
                 )
-            iter_counts[i] = {
-                "total": planned_r,
-                "done": 0,
-                "total_steps": planned_r * self._num_fm_steps,
-                "done_steps": 0,
-                "total_responses": 0,
-            }
+            iter_counts[i] = IterationCount(
+                total=planned_r,
+                done=0,
+                total_steps=planned_r * self._num_fm_steps,
+                done_steps=0,
+                total_responses=0,
+            )
         return iter_counts
 
     def _update_iteration_labels(
         self,
         tree: NavigationTree,
-        iter_counts: dict[int, dict[str, int]],
+        iter_counts: dict[int, IterationCount],
     ) -> None:
         """Second pass: update iteration nodes with correct final prefixes."""
         for it, counts in iter_counts.items():
-            is_it_done = counts["done"] == counts["total"] and counts["total"] > 0
+            is_it_done = counts.done == counts.total and counts.total > 0
             it_prefix = PREFIX_DONE if is_it_done else ICON_ITER
 
             # Simple label without progress bar: "✓ Iteration 0 (10/10)"
-            label = f"{it_prefix} Iteration {it} ({counts['done']}/{counts['total']})"
+            label = f"{it_prefix} Iteration {it} ({counts.done}/{counts.total})"
 
             if it not in self._iteration_nodes:
                 self._iteration_nodes[it] = tree.root.add(label, expand=True)
@@ -491,7 +534,7 @@ class GertMonitorApp(App[None]):
         it: int,
         r_id: int,
         st: str,
-        steps: list[dict[str, Any]],
+        steps: list[StepState],
     ) -> None:
         """Update a single realization node and its steps."""
         if it not in self._iteration_nodes:
@@ -507,15 +550,15 @@ class GertMonitorApp(App[None]):
         status_emoji = self._get_status_emoji(st)
 
         # Step progress: (completed_steps / total_planned)
-        done_steps = sum(1 for s in steps if s["status"] in {"COMPLETED", "FAILED"})
+        done_steps = sum(1 for s in steps if s.status in {"COMPLETED", "FAILED"})
         total_s = self._num_fm_steps if self._num_fm_steps > 0 else len(steps)
 
         label = f"{status_emoji} Real {r_id} ({done_steps}/{total_s})"
 
         # Determine current running step for the label suffix
-        current_step = next((s for s in steps if s["status"] == "RUNNING"), None)
+        current_step = next((s for s in steps if s.status == "RUNNING"), None)
         if current_step:
-            label += f" - {current_step['name']}"
+            label += f" - {current_step.name}"
 
         if (it, r_id) not in self._realization_nodes:
             self._realization_nodes[it, r_id] = iter_node.add(
@@ -535,10 +578,10 @@ class GertMonitorApp(App[None]):
         real_node: TreeNode[NodeData | None],
         it: int,
         r_id: int,
-        step: dict[str, Any],
+        step: StepState,
     ) -> None:
-        step_name = step["name"]
-        step_status = step["status"]
+        step_name = step.name
+        step_status = step.status
         status_emoji = self._get_status_emoji(step_status)
         step_label = f"{status_emoji} {step_name}"
 
@@ -561,25 +604,25 @@ class GertMonitorApp(App[None]):
         else:
             self._step_nodes[it, r_id, step_name].set_label(step_label)
 
-    def _update_progress_bars(self, iter_counts: dict[int, dict[str, int]]) -> None:
+    def _update_progress_bars(self, iter_counts: dict[int, IterationCount]) -> None:
         progress_view = self.query_one(ProgressView)
 
         # Aggregate totals across all iterations
-        total_done = sum(c["done"] for c in iter_counts.values())
-        total_r = sum(c["total"] for c in iter_counts.values())
-        total_done_steps = sum(c["done_steps"] for c in iter_counts.values())
-        total_planned_steps = sum(c["total_steps"] for c in iter_counts.values())
-        total_responses = sum(c["total_responses"] for c in iter_counts.values())
+        total_done = sum(c.done for c in iter_counts.values())
+        total_r = sum(c.total for c in iter_counts.values())
+        total_done_steps = sum(c.done_steps for c in iter_counts.values())
+        total_planned_steps = sum(c.total_steps for c in iter_counts.values())
+        total_responses = sum(c.total_responses for c in iter_counts.values())
 
         # We append a virtual iteration -1 for the "TOTAL" row
         display_counts = dict(iter_counts)
-        display_counts[-1] = {
-            "total": total_r,
-            "done": total_done,
-            "total_steps": total_planned_steps,
-            "done_steps": total_done_steps,
-            "total_responses": total_responses,
-        }
+        display_counts[-1] = IterationCount(
+            total=total_r,
+            done=total_done,
+            total_steps=total_planned_steps,
+            done_steps=total_done_steps,
+            total_responses=total_responses,
+        )
 
         # Calculate padding needed for step counts
         # Max steps across all displayed rows
@@ -589,14 +632,14 @@ class GertMonitorApp(App[None]):
         for it, counts in sorted(display_counts.items()):
             # Update Top View Progress Rows
             # Counter shows: Steps | Responses
-            done_s = str(counts["done_steps"]).rjust(step_width)
-            total_s = str(counts["total_steps"]).rjust(step_width)
+            done_s = str(counts.done_steps).rjust(step_width)
+            total_s = str(counts.total_steps).rjust(step_width)
             step_info = f"{ICON_FM} {done_s}/{total_s}"
 
-            resp_info = f"{ICON_RES} {str(counts['total_responses']).rjust(4)}"
+            resp_info = f"{ICON_RES} {str(counts.total_responses).rjust(4)}"
             counter_text = f"{step_info} | {resp_info}"
             if it not in self._iteration_bar_widgets:
-                pb = ProgressBar(total=max(1, counts["total"]), show_eta=False)
+                pb = ProgressBar(total=max(1, counts.total), show_eta=False)
                 cnt = Label(counter_text, classes="iteration-counter")
                 self._iteration_bar_widgets[it] = (pb, cnt)
 
@@ -610,16 +653,19 @@ class GertMonitorApp(App[None]):
                 progress_view.mount(row)
             else:
                 pb, cnt = self._iteration_bar_widgets[it]
-                pb.total = max(1, counts["total"])
-                pb.progress = counts["done"]
+                pb.total = max(1, counts.total)
+                pb.progress = counts.done
                 cnt.update(counter_text)
 
     def process_responses(self, iteration: int, data: list[dict[str, Any]]) -> None:
         """Process response data and update the cached responses on the main thread."""
-        for item in data:
-            r_id = item.get("realization")
-            if r_id is not None:
-                self._responses[iteration, r_id].append(item)
+        parsed_data = [ResponseItem.model_validate(item) for item in data]
+        iteration_responses: dict[int, list[ResponseItem]] = defaultdict(list)
+        for item in parsed_data:
+            if item.realization is not None:
+                iteration_responses[item.realization].append(item)
+
+        self._responses[iteration] = dict(iteration_responses)
 
     def on_tree_node_highlighted(
         self,
@@ -673,7 +719,7 @@ class GertMonitorApp(App[None]):
     ) -> None:
         state = self._statuses.get((it, r_id))
         step = (
-            next((s for s in state.get("steps", []) if s["name"] == step_name), None)
+            next((s for s in state.steps if s.name == step_name), None)
             if state
             else None
         )
@@ -706,10 +752,10 @@ class GertMonitorApp(App[None]):
         it: int,
         r_id: int,
         step_name: str,
-        state: dict[str, Any],
+        state: RealizationState,
     ) -> None:
         step = next(
-            (s for s in state.get("steps", []) if s["name"] == step_name),
+            (s for s in state.steps if s.name == step_name),
             None,
         )
         content = [
@@ -755,21 +801,22 @@ class GertMonitorApp(App[None]):
         it: int,
         r_id: int,
     ) -> None:
-        responses = self._responses.get((it, r_id), [])
+        responses = self._responses.get(it, {}).get(r_id, [])
         last_value = None
         key_fields = {}
         if responses:
             # Use only the last one for brevity
             last_resp = responses[-1]
             known_fields = {"realization", "source_step", "value", "type"}
+            last_resp_dict = last_resp.model_dump()
             key_fields = {
                 k: v
-                for k, v in last_resp.items()
+                for k, v in last_resp_dict.items()
                 if k not in known_fields and v is not None
             }
-            last_value = str(last_resp.get("value"))
+            last_value = str(last_resp.value)
 
-        st = self._statuses[it, r_id]["status"]
+        st = self._statuses[it, r_id].status
         emoji = self._get_status_emoji(st)
 
         content = [
