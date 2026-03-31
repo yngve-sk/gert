@@ -3,95 +3,116 @@
 import asyncio
 import hashlib
 import json
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 
 class ConsolidationWorker:
     """Background worker that consolidates .jsonl ingestion queues into .parquet files.
 
     Uses polars for high-performance columnar data processing.
+    Ensures a single instance per ensemble_path via a registry.
     """
 
-    def __init__(self, base_storage_path: Path) -> None:
-        """Initialize the worker with a base storage path.
+    _registry: ClassVar[dict[Path, "ConsolidationWorker"]] = {}
 
-        Args:
-            base_storage_path: The root directory for storing ingestion queues.
+    @classmethod
+    def get_instance(cls, ensemble_path: Path) -> "ConsolidationWorker":
+        """Get or create the singleton worker for a specific ensemble path."""
+        abs_path = ensemble_path.resolve()
+        if abs_path not in cls._registry:
+            cls._registry[abs_path] = cls(abs_path)
+        return cls._registry[abs_path]
+
+    def __init__(self, ensemble_path: Path) -> None:
+        """Initialize the worker with an ensemble path.
+
+        Use ConsolidationWorker.get_instance() instead of direct instantiation.
         """
-        self._base_storage_path = base_storage_path
-
-    def consolidate(self, experiment_id: str, execution_id: str) -> None:
-        """Drain the .jsonl queue and upsert data into the .parquet response files.
-
-        Processes all ensemble (iteration) directories within the execution.
-
-        Args:
-            experiment_id: The ID of the experiment.
-            execution_id: The unique ID of the execution.
-        """
-        execution_dir = self._base_storage_path / experiment_id / execution_id
-        if not execution_dir.exists():
-            return
-
-        for queue_dir in execution_dir.iterdir():
-            if not queue_dir.is_dir():
-                continue
-
-            self.consolidate_ensemble(queue_dir)
+        self._ensemble_path = ensemble_path
+        self._lock = asyncio.Lock()
 
     async def start_watching(
         self,
-        queue_path: Path,
         interval: float = 5.0,
     ) -> None:
         """Continuously drain the .jsonl queue at the specified interval.
 
         Args:
-            queue_path: The path to the .jsonl ingestion queue.
             interval: The interval in seconds to wait between consolidations.
+
+        Raises:
+            asyncio.CancelledError: If the watcher task is cancelled.
         """
-        while True:
-            await asyncio.sleep(interval)
-            # Find the parent queue_dir that contains these files
-            # to reuse the existing method. In interfaces.md it mentions
-            # taking queue_path and parquet_path, but consolidate_ensemble
-            # takes queue_dir. We can adapt it here.
-            queue_dir = queue_path.parent
-            if queue_dir.exists():
-                self.consolidate_ensemble(queue_dir)
-
-    def consolidate_ensemble(self, queue_dir: Path) -> None:
-        """Read ingestion queue, route data to schema-specific tables, and update registry."""  # noqa: E501
-        queue_file = queue_dir / "ingestion_queue.jsonl"
-        if not queue_file.exists() or queue_file.stat().st_size == 0:
-            return
-
-        # 1. Protect queue from concurrent ingestion
-        processing_file = queue_dir / "processing_queue.jsonl"
-        queue_file.rename(processing_file)
-
         try:
-            # 2. Parse heterogeneous JSONL records
-            with Path(processing_file).open("r", encoding="utf-8") as f:
-                records = [json.loads(line) for line in f]
+            while True:
+                await asyncio.sleep(interval)
+                if self._ensemble_path.exists():
+                    await self.consolidate()
+        except asyncio.CancelledError:
+            # Final consolidation attempt on cancellation
+            if self._ensemble_path.exists():
+                await self.consolidate()
+            raise
 
-            # Map each record to its schema-specific bucket
-            # Key = tuple of sorted dimension keys
-            buckets: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    async def consolidate(self) -> None:
+        """Read ingestion queue and route data to schema-specific tables."""
+        async with self._lock:
+            queue_file = self._ensemble_path / "ingestion_queue.jsonl"
+            if not queue_file.exists() or queue_file.stat().st_size == 0:
+                return
 
-            for rec in records:
-                # Unnest 'key' dict and realization
-                flat = {"realization": rec["realization"], "value": rec["value"]}
+            logger.info(f"Consolidation started: {self._ensemble_path}")
+
+            processing_file = self._ensemble_path / "processing_queue.jsonl"
+            try:
+                queue_file.rename(processing_file)
+            except OSError:
+                logger.exception(f"Failed to rename queue file {queue_file}")
+                return
+
+            try:
+                records = await self._parse_jsonl_file(processing_file)
+                if not records:
+                    return
+
+                buckets = self._group_records_by_schema(records)
+                self._process_buckets(buckets)
+
+            except Exception:
+                logger.exception("Unexpected error during consolidation")
+                raise
+            finally:
+                if processing_file.exists():
+                    try:
+                        processing_file.unlink()
+                    except OSError:
+                        logger.exception(f"Failed to delete {processing_file}")
+
+    def _group_records_by_schema(
+        self,
+        records: list[dict[str, Any]],
+    ) -> dict[tuple[str, ...], list[dict[str, Any]]]:
+        """Group ingestion records by their schema (sorted keys)."""
+        buckets: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+
+        for rec in records:
+            try:
+                flat = {
+                    "realization": rec["realization"],
+                    "value": rec["value"],
+                }
                 dims = []
                 if isinstance(rec["key"], dict):
                     for k, v in rec["key"].items():
                         flat[k] = v
                         dims.append(k)
                 else:
-                    # Handle legacy or simple string keys
                     flat["key"] = rec["key"]
                     dims.append("key")
 
@@ -99,36 +120,59 @@ class ConsolidationWorker:
                 if schema_key not in buckets:
                     buckets[schema_key] = []
                 buckets[schema_key].append(flat)
+            except KeyError:
+                msg = f"Missing required key in record. Record: {rec}"
+                logger.exception(msg)
+                continue
 
-            # 3. Process each bucket (One Table per Schema)
-            resp_dir = queue_dir / "responses"
-            resp_dir.mkdir(exist_ok=True)
+        return buckets
 
-            for schema_key, schema_records in buckets.items():
+    def _process_buckets(
+        self,
+        buckets: dict[tuple[str, ...], list[dict[str, Any]]],
+    ) -> None:
+        """Write grouped records to their respective schema-specific parquet files."""
+        resp_dir = self._ensemble_path / "responses"
+        resp_dir.mkdir(exist_ok=True)
+
+        for schema_key, schema_records in buckets.items():
+            try:
                 df_new = pl.DataFrame(schema_records)
-
-                # Deterministic filename based on schema
                 schema_hash = hashlib.sha256("".join(schema_key).encode()).hexdigest()[
                     :8
                 ]
-                table_name = f"data_{schema_hash}.parquet"
+                parquet_file = resp_dir / f"data_{schema_hash}.parquet"
 
-                parquet_file = resp_dir / table_name
-                primary_keys = list(schema_key)
-
-                # Join/Upsert logic
                 if parquet_file.exists():
                     df_existing = pl.read_parquet(parquet_file)
-                    # Merge and keep latest value per realization+coords
                     consolidated = pl.concat([df_existing, df_new], how="diagonal")
                     consolidated = consolidated.unique(
-                        subset=["realization", *primary_keys],
+                        subset=["realization", *schema_key],
                         keep="last",
                     )
                 else:
                     consolidated = df_new
 
                 consolidated.write_parquet(parquet_file)
+                logger.debug(f"Updated {parquet_file} ({len(schema_records)} records)")
+            except Exception:
+                logger.exception(f"Error processing bucket {schema_key}")
 
-        finally:
-            processing_file.unlink()
+    async def _parse_jsonl_file(self, file_path: Path) -> list[dict[str, Any]]:
+        """Read and parse a JSONL file in a thread pool to avoid blocking."""
+
+        def _read_and_parse() -> list[dict[str, Any]]:
+            records = []
+            with file_path.open("r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f, 1):
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        logger.exception(
+                            f"JSON decode error in {file_path} line {line_num}",
+                        )
+                        continue
+            return records
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _read_and_parse)

@@ -1,6 +1,8 @@
 """API router for GERT server."""
 
 import asyncio
+import logging
+import traceback
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -19,6 +21,8 @@ from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrato
 from gert.experiments.models import ExperimentConfig, IngestionPayload
 from gert.storage.api import StorageAPI
 from gert.storage.ingestion import IngestionReceiver
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["experiments"])
 
@@ -65,6 +69,13 @@ class ExperimentResponse(BaseModel):
     id: str = Field(..., description="The unique experiment ID.")
 
 
+class ExecutionState(BaseModel):
+    """Overall state of an experiment execution."""
+
+    status: str
+    error: str | None = None
+
+
 # In-memory storage for experiment configurations (Mocked storage)
 # In PR 2.1, this should move to a more persistent storage backend.
 _experiment_configs: dict[str, ExperimentConfig] = {}
@@ -73,6 +84,7 @@ _experiment_statuses: dict[
     str,
     dict[int, dict[int, RealizationStatus]],
 ] = defaultdict(lambda: defaultdict(dict))
+_execution_states: dict[str, ExecutionState] = {}
 _consolidation_tasks: set[asyncio.Task[Any]] = set()
 _experiment_run_counts: dict[str, int] = defaultdict(int)
 _latest_execution_id: dict[str, str] = {}
@@ -138,12 +150,9 @@ async def get_experiment_metadata(
         )
     config = _experiment_configs[experiment_id]
 
-    # Calculate realizations from parameter matrix
-    realizations: set[int] = set()
-    for param_values in config.parameter_matrix.values.values():
-        realizations.update(param_values.keys())
-
-    num_realizations = len(realizations)
+    num_realizations = len(
+        config.parameter_matrix.get_realizations(config.base_working_directory),
+    )
     num_fm_steps = len(config.forward_model_steps)
     step_names = [s.name for s in config.forward_model_steps]
     num_iterations = len(config.updates) + 1  # Prior + N updates
@@ -241,8 +250,23 @@ async def start_experiment(
     _executions_to_configs[execution_id] = config
     _latest_execution_id[experiment_id] = execution_id
 
+    _execution_states[execution_id] = ExecutionState(status="RUNNING")
+
+    async def _run_wrapped() -> None:
+        try:
+            await orchestrator.run_experiment()
+            _execution_states[execution_id] = ExecutionState(status="COMPLETED")
+        except Exception:
+            error_msg = traceback.format_exc()
+            _execution_states[execution_id] = ExecutionState(
+                status="FAILED",
+                error=error_msg,
+            )
+            # Make sure it gets printed on the server side as well
+            logger.exception("Background execution failed")
+
     # 1. Execute the orchestrator loop strictly in the background (Fire and Forget)
-    task = asyncio.create_task(orchestrator.run_experiment())
+    task = asyncio.create_task(_run_wrapped())
     _consolidation_tasks.add(task)
     task.add_done_callback(_consolidation_tasks.discard)
 
@@ -251,6 +275,29 @@ async def start_experiment(
     # Allow a microscopic tick for PENDING statuses to be emitted via callback
     await asyncio.sleep(0.05)
     return {"execution_id": execution_id, "iteration": 0}
+
+
+@router.get(
+    "/experiments/{experiment_id}/executions/{execution_id}/state",
+    summary="Retrieve execution state",
+    description="Returns the overall state of an execution.",
+)
+async def get_execution_state(
+    experiment_id: str,
+    execution_id: str,
+) -> ExecutionState:
+    """Retrieve the overall state of an execution.
+
+    Raises:
+        HTTPException: If the execution state is not found.
+    """
+    _ = experiment_id
+    if execution_id not in _execution_states:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' state not found",
+        )
+    return _execution_states[execution_id]
 
 
 @router.get(
@@ -449,6 +496,44 @@ async def ingest_data(
         payload=payload,
     )
     return {"status": "success"}
+
+
+@router.get(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/parameters",
+    summary="Retrieve parameter matrix",
+    description="Returns the parameter matrix for a given execution and iteration.",
+)
+async def get_parameters(
+    experiment_id: str,
+    execution_id: str,
+    iteration: int,
+) -> list[dict[str, Any]]:
+    """Retrieve the parameter matrix as a list of dictionaries.
+
+    Raises:
+        HTTPException: If the experiment is not found.
+    """
+    config = _experiment_configs.get(experiment_id)
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+
+    api = StorageAPI(base_storage_path=config.storage_base)
+    try:
+        df = api.get_parameters(
+            experiment_id=config.name,
+            execution_id=execution_id,
+            iteration=iteration,
+        )
+        return df.to_dicts()
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
 
 
 @router.get(

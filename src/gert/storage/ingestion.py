@@ -39,12 +39,12 @@ class IngestionReceiver:
         Raises:
             TypeError: If the payload is not a Pydantic model.
         """
-        queue_dir = (
+        ensemble_path = (
             self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
         )
-        queue_dir.mkdir(parents=True, exist_ok=True)
+        ensemble_path.mkdir(parents=True, exist_ok=True)
 
-        queue_file = queue_dir / "ingestion_queue.jsonl"
+        queue_file = ensemble_path / "ingestion_queue.jsonl"
 
         # Serialize using Pydantic's model_dump(mode="json")
         # Handle the Union by accessing model_dump if it's a BaseModel

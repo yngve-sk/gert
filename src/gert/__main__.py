@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import logging
 import subprocess
 import sys
 import time
@@ -14,17 +15,34 @@ from urllib.parse import urlparse
 import httpx
 import uvicorn
 
+from gert.experiments.models import (
+    ParameterMatrix,
+)
 from gert.monitor import start_monitor
+
+log = logging.getLogger(__name__)
 
 
 def _get_expected_realizations(config_data: dict[str, Any]) -> int:
     """Calculate the number of unique realizations expected."""
+    # Attempt to instantiate ParameterMatrix to use its robust get_realizations
+    try:
+        pm = ParameterMatrix(**config_data.get("parameter_matrix", {}))
+        base_dir_str = config_data.get("base_working_directory", ".")
+        reals = pm.get_realizations(Path(base_dir_str))
+        if reals:
+            return len(reals)
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "Could not calculate expected realizations from ParameterMatrix: %s",
+            e,
+        )
+
+    # Fallback to reading values dict
     realizations = set()
     values = config_data.get("parameter_matrix", {}).get("values", {})
     for param_values in values.values():
         realizations.update(param_values.keys())
-    datasets = config_data.get("parameter_matrix", {}).get("datasets", [])
-    realizations.update(dataset.get("realization") for dataset in datasets)
     return len(realizations)
 
 
@@ -93,6 +111,26 @@ def _ensure_server(
     return None
 
 
+def _check_execution_state(
+    client: httpx.Client,
+    experiment_id: str,
+    execution_id: str,
+) -> None:
+    """Check overall execution state and exit if failed."""
+    state_resp = client.get(
+        f"/experiments/{experiment_id}/executions/{execution_id}/state",
+    )
+    state_resp.raise_for_status()
+    exec_state = state_resp.json()
+    if exec_state["status"] == "FAILED":
+        err_msg = exec_state.get("error", "Unknown error")
+        print(
+            f"\n❌ Execution Failed in background process:\n{err_msg}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def _poll_for_completion(
     client: httpx.Client,
     experiment_id: str,
@@ -106,6 +144,8 @@ def _poll_for_completion(
 
     while len(completed_iterations) < num_iterations:
         try:
+            _check_execution_state(client, experiment_id, execution_id)
+
             resp = client.get(
                 f"/experiments/{experiment_id}/executions/{execution_id}/status",
             )
@@ -124,16 +164,10 @@ def _poll_for_completion(
 
             if len(completed_iterations) < num_iterations:
                 time.sleep(1)
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, KeyError, ValueError) as e:
             print(f"Polling error: {e}")
             time.sleep(1)
 
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code != 404:
-                print(
-                    f"API Error during polling: {e.response.text}",
-                    file=sys.stderr,
-                )
         time.sleep(0.1)
 
 

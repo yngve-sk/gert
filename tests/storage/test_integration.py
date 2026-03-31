@@ -22,7 +22,7 @@ def clean_storage() -> Generator[None]:
         shutil.rmtree(storage_path)
 
 
-def test_storage_integration_blast(clean_storage: None) -> None:
+async def test_storage_integration_blast(clean_storage: None) -> None:
     """Blast 100 concurrent payloads and verify consolidation."""
     client = TestClient(gert_server_app)
 
@@ -63,8 +63,14 @@ def test_storage_integration_blast(clean_storage: None) -> None:
         )
         assert response.status_code == 202
 
-    worker = ConsolidationWorker(Path("./permanent_storage"))
-    worker.consolidate(experiment_name, execution_id)
+    ensemble_path = (
+        Path("./permanent_storage")
+        / experiment_name
+        / execution_id
+        / f"iter-{iteration}"
+    )
+    worker = ConsolidationWorker.get_instance(ensemble_path)
+    await worker.consolidate()
 
     # 2. Retrieve responses
     response = client.get(
@@ -128,8 +134,14 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
     for response in responses:
         assert response.status_code == 202
 
-    worker = ConsolidationWorker(Path("./permanent_storage"))
-    worker.consolidate(experiment_name, execution_id)
+    ensemble_path = (
+        Path("./permanent_storage")
+        / experiment_name
+        / execution_id
+        / f"iter-{iteration}"
+    )
+    worker = ConsolidationWorker.get_instance(ensemble_path)
+    await worker.consolidate()
 
     # Verify via regular TestClient
     client = TestClient(gert_server_app)

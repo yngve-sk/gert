@@ -21,8 +21,8 @@ This module isolates all high-throughput disk I/O, message queuing, and Parquet 
     * `push_data(experiment_id: str, execution_id: str, payload: IngestionPayload) -> bool`
     * *Implementation details:* Writes incoming generic JSON directly to a fast, append-only `.jsonl` queue.
 * **`ConsolidationWorker` (Background Process)**
-    * `start_watching(queue_path: Path, parquet_path: Path)`
-    * *Implementation details:* Uses `polars` to continuously drain the `.jsonl` queue, perform upserts/joins, and update the analytical columnar `.parquet` datasets.
+    * `start_watching(interval: float)`
+    * *Implementation details:* Initialized with an `ensemble_path`. Uses `polars` to continuously drain the `.jsonl` queue, perform upserts/joins, and update the analytical columnar `.parquet` datasets.
 * **`StorageQueryAPI` (Interface)**
     * `get_parameters(experiment_id: str, execution_id: str, iteration: int) -> DataFrame`
     * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None) -> DataFrame`
