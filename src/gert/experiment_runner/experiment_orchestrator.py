@@ -1,5 +1,7 @@
 import asyncio
+import functools
 import json
+import logging
 import os
 import uuid
 from collections import defaultdict
@@ -22,6 +24,8 @@ from gert.storage.consolidation import ConsolidationWorker
 
 from .job_submitter import JobSubmitter
 from .realization_workdir_manager import RealizationWorkdirManager
+
+logger = logging.getLogger(__name__)
 
 
 class ExperimentOrchestrator:
@@ -130,6 +134,8 @@ class ExperimentOrchestrator:
         self._active_jobs: dict[int, dict[int, str]] = defaultdict(dict)
         # Track completed jobs: {iteration: set(realization_id)}
         self._completed_realizations: dict[int, set[int]] = defaultdict(set)
+        # Track expected number of realizations per iteration
+        self._expected_realizations: dict[int, int] = {}
         # Completion event per iteration
         self._iteration_events: dict[int, asyncio.Event] = {}
 
@@ -137,6 +143,8 @@ class ExperimentOrchestrator:
         """Ensure state structures exist for a given iteration."""
         if iteration not in self._iteration_events:
             self._iteration_events[iteration] = asyncio.Event()
+        if iteration not in self._expected_realizations:
+            self._expected_realizations[iteration] = 0
         # defaultdict handles _active_jobs and _completed_realizations
 
     @property
@@ -157,26 +165,28 @@ class ExperimentOrchestrator:
                 experiment_id=self._config.name,
                 execution_id=self._execution_id,
                 iteration=0,
-                parameters=self._parameter_matrix_to_df(current_parameters),
+                parameters=current_parameters.to_df(
+                    self._config.base_working_directory,
+                ),
             )
 
         # Track consolidation background tasks
         consolidation_tasks: set[asyncio.Task[Any]] = set()
 
         for i in range(num_updates + 1):
+            logger.info(f"Starting iteration {i}/{num_updates}")
             # 0. Start the consolidation background worker for this iteration
             if self._storage_api:
-                worker = ConsolidationWorker(self._config.storage_base)
-                queue_path = (
+                ensemble_path = (
                     self._config.storage_base
                     / self._config.name
                     / self._execution_id
                     / f"iter-{i}"
-                    / "ingestion_queue.jsonl"
                 )
+                logger.info(f"Starting consolidation watcher for {ensemble_path}")
+                worker = ConsolidationWorker.get_instance(ensemble_path)
                 watch_task = asyncio.create_task(
                     worker.start_watching(
-                        queue_path,
                         self._config.consolidation_interval,
                     ),
                 )
@@ -184,16 +194,20 @@ class ExperimentOrchestrator:
                 watch_task.add_done_callback(consolidation_tasks.discard)
 
             # 1. Run Forward Models for this iteration
+            logger.info(f"Submitting forward models for iteration {i}")
             self.run_iteration(i, current_parameters)
 
             # 2. Wait for all realizations in this iteration to finish
+            logger.info(f"Waiting for iteration {i} realizations to complete...")
             await self._wait_for_iteration(i)
+            logger.info(f"All realizations for iteration {i} completed.")
 
             # 3. Flush storage and cancel the watching task for this iteration
             if self._storage_api:
+                logger.info(f"Flushing storage for iteration {i}")
                 if watch_task in consolidation_tasks:
                     watch_task.cancel()
-                self._storage_api.flush(
+                await self._storage_api.flush(
                     experiment_id=self._config.name,
                     execution_id=self._execution_id,
                     iteration=i,
@@ -201,8 +215,12 @@ class ExperimentOrchestrator:
 
             # 4. Perform Update (if not the last iteration)
             if i < num_updates:
-                # perform_update returns a Wide DataFrame
-                updated_params_df = self.perform_update(i)
+                try:
+                    # perform_update returns a Wide DataFrame
+                    updated_params_df = await self.perform_update(i)
+                except Exception:
+                    logger.exception(f"Failed to perform update at iteration {i}")
+                    raise
 
                 # Write posterior parameters to storage for the NEXT iteration
                 self._storage_api.write_parameters(
@@ -213,7 +231,9 @@ class ExperimentOrchestrator:
                 )
 
                 # Prepare for next iteration's injection
-                current_parameters = self._df_to_parameter_matrix(updated_params_df)
+                current_parameters = current_parameters.replace_values_from_df(
+                    updated_params_df,
+                )
             else:
                 # Final posterior evaluation complete
                 break
@@ -234,12 +254,12 @@ class ExperimentOrchestrator:
             raise ValueError(msg)
 
         # Determine realizations from the parameter matrix
-        realizations: set[int] = set()
-        if parameters.values:
-            for payload in parameters.values.values():
-                realizations.update(payload.keys())
+        realizations: set[int] = parameters.get_realizations(
+            self._config.base_working_directory,
+        )
 
         self._ensure_iteration_state(iteration)
+        self._expected_realizations[iteration] = len(realizations)
 
         # Initialize all known realizations as PENDING via the callback
         if self._monitoring_callback:
@@ -338,6 +358,7 @@ class ExperimentOrchestrator:
         execution_steps: list[dict[str, str]],
     ) -> Callable[[psij.Job, psij.JobStatus], None]:
         """Create a status callback for a job."""
+        loop = asyncio.get_running_loop()
 
         def _status_cb(_job: psij.Job, status: psij.JobStatus) -> None:
             if status.final:
@@ -388,12 +409,15 @@ class ExperimentOrchestrator:
                     )
 
                 self._completed_realizations[iteration].add(realization_id)
-                if len(self._completed_realizations[iteration]) == len(
-                    self._active_jobs[iteration],
+                if (
+                    len(self._completed_realizations[iteration])
+                    == self._expected_realizations[iteration]
                 ):
-                    self._iteration_events[iteration].set()
+                    loop.call_soon_threadsafe(self._iteration_events[iteration].set)
+
             if self._monitoring_callback:
-                self._monitoring_callback(
+                loop.call_soon_threadsafe(
+                    self._monitoring_callback,
                     realization_id,
                     iteration,
                     status.state.name,
@@ -403,7 +427,8 @@ class ExperimentOrchestrator:
         return _status_cb
 
     def _inject_parameters(self, workdir: Path, realization_id: int) -> None:
-        """Inject parameters.json into the realization workdir."""
+        """Inject parameters.json and field datasets into the realization workdir."""
+        # 1. Inject scalar values into parameters.json
         params = {}
         for key, val_dict in self._config.parameter_matrix.values.items():
             if realization_id in val_dict:
@@ -412,13 +437,66 @@ class ExperimentOrchestrator:
         with (workdir / "parameters.json").open("w", encoding="utf-8") as f:
             json.dump(params, f)
 
-    async def _wait_for_iteration(self, iteration: int) -> None:
-        """Wait until all realizations in the iteration are final."""
-        if len(self._active_jobs[iteration]) == 0:
-            return
-        await self._iteration_events[iteration].wait()
+        # 2. Inject field datasets (ParameterDataset)
+        for i, dataset in enumerate(self._config.parameter_matrix.datasets):
+            source_path = Path(dataset.reference.path)
+            if not source_path.is_absolute():
+                source_path = (
+                    self._config.base_working_directory / source_path
+                ).resolve()
 
-    def perform_update(self, iteration: int) -> pl.DataFrame:
+            if not source_path.exists():
+                continue
+
+            # Load the full dataset (all realizations)
+            df = pl.read_parquet(source_path)
+
+            # Filter for this specific realization
+            if "realization" in df.columns:
+                real_df = df.filter(pl.col("realization") == realization_id)
+            else:
+                # If no realization column, assume the file is for one realization.
+                # Possible in partitioned schemes.
+                real_df = df
+
+            # Determine target filename
+            # Use index or some property if we added names to datasets in models.
+            target_name = f"field_data_{i}.parquet"
+            real_df.write_parquet(workdir / target_name)
+
+    async def _wait_for_iteration(self, iteration: int) -> None:
+        """Wait until all realizations in the iteration are final.
+
+        Args:
+            iteration: The iteration to wait for.
+
+        Raises:
+            TimeoutError: If the iteration does not complete within the timeout.
+        """
+        if self._expected_realizations.get(iteration, 0) == 0:
+            return
+
+        timeout = 120.0
+        try:
+            async with asyncio.timeout(timeout):
+                await self._iteration_events[iteration].wait()
+        except TimeoutError:
+            num_completed = len(self._completed_realizations[iteration])
+            num_total = self._expected_realizations[iteration]
+            missing = (
+                set(self._active_jobs[iteration].keys())
+                - self._completed_realizations[iteration]
+            )
+            msg = (
+                f"Iteration {iteration} timed out after {timeout}s! "
+                f"Completed: {num_completed}/{num_total}. "
+                f"Missing realizations: {sorted(missing)}"
+            )
+            logger.exception(msg)
+            # Log any logs we might have for the missing realizations to help debug
+            raise
+
+    async def perform_update(self, iteration: int) -> pl.DataFrame:
         """Invoke the math plugin for the given iteration.
 
         Args:
@@ -429,7 +507,12 @@ class ExperimentOrchestrator:
 
         Raises:
             ValueError: If the iteration index is out of bounds or algorithm not found.
+            FileNotFoundError: If responses are not found for the iteration.
         """
+        # 0. Ensure data is consolidated before fetching
+        logger.info(f"Performing mathematical update for iteration {iteration}")
+        await self._storage_api.consolidate(self._config.name, self._execution_id)
+
         # 1. Fetch data from storage
         # current_parameters (from storage for this iteration)
         current_params_df = self._storage_api.get_parameters(
@@ -440,11 +523,40 @@ class ExperimentOrchestrator:
 
         # simulated_responses (from storage for this iteration)
         obs_df = self._observations_to_df()
-        sim_resp_df = self._storage_api.get_responses(
-            experiment_id=self._config.name,
-            execution_id=self._execution_id,
-            iteration=iteration,
-        )
+        try:
+            sim_resp_df = self._storage_api.get_responses(
+                experiment_id=self._config.name,
+                execution_id=self._execution_id,
+                iteration=iteration,
+            )
+        except FileNotFoundError:
+            logger.exception(f"Responses not found for iteration {iteration}!")
+            # Check if there is anything in the ingestion_queue.jsonl
+            ensemble_path = (
+                self._config.storage_base
+                / self._config.name
+                / self._execution_id
+                / f"iter-{iteration}"
+            )
+            queue_file = ensemble_path / "ingestion_queue.jsonl"
+            if queue_file.exists():
+                msg = (
+                    f"Ingestion queue exists but responses don't! "
+                    f"Size: {queue_file.stat().st_size}"
+                )
+                logger.exception(msg)
+            else:
+                logger.exception(f"Ingestion queue does not exist at {queue_file}!")
+            raise
+
+        if len(sim_resp_df) == 0:
+            msg = (
+                f"No responses found for iteration {iteration}. Update cannot proceed."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        logger.info(f"Retrieved {len(sim_resp_df)} responses for iteration {iteration}")
 
         # 2. Find and execute plugin
         update_step = self._config.updates[iteration]
@@ -466,13 +578,16 @@ class ExperimentOrchestrator:
             k for k, v in self._config.parameter_matrix.metadata.items() if v.updatable
         ]
 
-        return algo.perform_update(
+        func = functools.partial(
+            algo.perform_update,
             current_parameters=current_params_df,
             simulated_responses=sim_resp_df,
             observations=obs_df,
             updatable_parameter_keys=keys,
             algorithm_arguments=update_step.arguments,
         )
+
+        return await asyncio.get_running_loop().run_in_executor(None, func)
 
     def _observations_to_df(self) -> pl.DataFrame:
         """Convert observations to a Wide DataFrame."""
@@ -485,55 +600,3 @@ class ExperimentOrchestrator:
                 row.update(obs.coordinates)
             data.append(row)
         return pl.DataFrame(data)
-
-    def _df_to_parameter_matrix(self, df: pl.DataFrame) -> ParameterMatrix:
-        """Convert a Wide DataFrame back to ParameterMatrix.
-
-        Args:
-            df: The Wide DataFrame to convert.
-
-        Returns:
-            A ParameterMatrix instance.
-
-
-        """
-
-        new_values: dict[str, dict[int, Any]] = {}
-        for col in df.columns:
-            if col == "realization":
-                continue
-            new_values[col] = dict(zip(df["realization"], df[col], strict=False))
-
-        return ParameterMatrix(
-            metadata=self._config.parameter_matrix.metadata,
-            values=new_values,
-            # Datasets are not explicitly handled in this simple conversion yet
-            datasets=self._config.parameter_matrix.datasets,
-        )
-
-    def _parameter_matrix_to_df(self, pm: ParameterMatrix) -> pl.DataFrame:
-        """Convert ParameterMatrix to a Wide DataFrame.
-
-        Args:
-            pm: The ParameterMatrix to convert.
-
-        Returns:
-            A Polars DataFrame where rows are realizations.
-        """
-        # Collect all realization IDs
-        realizations: set[int] = set()
-        for val_dict in pm.values.values():
-            realizations.update(val_dict.keys())
-
-        if not realizations:
-            return pl.DataFrame({"realization": []})
-
-        rows = []
-        for r_id in sorted(realizations):
-            row: dict[str, Any] = {"realization": r_id}
-            for key, val_dict in pm.values.items():
-                if r_id in val_dict:
-                    row[key] = val_dict[r_id]
-            rows.append(row)
-
-        return pl.DataFrame(rows)

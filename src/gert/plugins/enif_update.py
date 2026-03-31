@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import networkx as nx
 import numpy as np
 import polars as pl
 import scipy.sparse as sp
@@ -35,7 +36,18 @@ class EnIFUpdate(UpdateAlgorithm):
         # 1. Sort DataFrames to ensure deterministic realization order
         current_parameters = current_parameters.sort("realization")
 
-        # 2. Extract Parameters (X)
+        # 1.a Identify Parameter Categories
+        all_cols = current_parameters.columns
+        static_cols = [
+            c
+            for c in all_cols
+            if c not in updatable_parameter_keys and c != "realization"
+        ]
+
+        # 2. Isolate Static Data
+        static_params_df = current_parameters.select(["realization", *static_cols])
+
+        # 3. Extract Updatable Parameters (X)
         x_arrays = []
         block_indices = []
         current_col_idx = 0
@@ -139,9 +151,26 @@ class EnIFUpdate(UpdateAlgorithm):
                 # Fallback for independent scalar parameters
                 sub_prec = sp.diags([1.0], offsets=[0], format="csc")
             elif graph is None:
-                msg = f"EnIF requires a networkx graph for spatial parameter '{base_key}', but none was provided."
-                raise ValueError(msg)
-            else:
+                # Check for grid_dimensions in algorithm_arguments
+                grid_dims = algorithm_arguments.get("grid_dimensions")
+                if grid_dims and isinstance(grid_dims, list) and len(grid_dims) == 2:
+                    nx_dim, ny_dim = grid_dims[0], grid_dims[1]
+                    if nx_dim * ny_dim != X_param_scaled.shape[1]:
+                        msg = (
+                            f"grid_dimensions {grid_dims} do not match the number of "
+                            f"features ({X_param_scaled.shape[1]}) for parameter '{base_key}'."
+                        )
+                        raise ValueError(msg)
+
+                    # Create a 2D grid graph and map tuple nodes to integers
+                    grid_graph = nx.grid_2d_graph(nx_dim, ny_dim)
+                    mapping = {(i, j): i * ny_dim + j for (i, j) in grid_graph.nodes()}
+                    graph = nx.relabel_nodes(grid_graph, mapping)
+                else:
+                    msg = f"EnIF requires a networkx graph for spatial parameter '{base_key}', but none was provided."
+                    raise ValueError(msg)
+
+            if graph is not None:
                 sub_prec = fit_precision_cholesky_approximate(
                     X_param_scaled,
                     graph,
@@ -172,10 +201,12 @@ class EnIFUpdate(UpdateAlgorithm):
             seed=seed,
         )
 
-        # 10. Post-Processing & Return
+        # 10. Post-Processing & Construct Final DataFrame
         X_updated = scaler.inverse_transform(X_updated_scaled)
 
-        updated_parameters = current_parameters.clone()
+        # Construct updated_params_df
+        updated_columns = [current_parameters["realization"]]
+
         for key, start_idx, end_idx in block_indices:
             updated_data = X_updated[:, start_idx:end_idx]
 
@@ -183,13 +214,14 @@ class EnIFUpdate(UpdateAlgorithm):
                 current_parameters[key].dtype,
             ):
                 # Write back as scalar
-                updated_parameters = updated_parameters.with_columns(
-                    pl.Series(name=key, values=updated_data[:, 0]),
-                )
+                updated_columns.append(pl.Series(name=key, values=updated_data[:, 0]))
             else:
                 # Write back as List
-                updated_parameters = updated_parameters.with_columns(
+                updated_columns.append(
                     pl.Series(name=key, values=updated_data.tolist()),
                 )
 
-        return updated_parameters
+        updated_params_df = pl.DataFrame(updated_columns)
+
+        # Join with static parameters
+        return updated_params_df.join(static_params_df, on="realization", how="left")

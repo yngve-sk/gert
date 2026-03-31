@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import polars as pl
 import psij
 import pytest
 
@@ -248,6 +247,8 @@ class TestExperimentOrchestrator:
             "submit",
             side_effect=side_effect_submit,
         ):
+            orchestrator._ensure_iteration_state(3)
+            orchestrator._expected_realizations[3] = 1
             orchestrator.evaluate_forward_model(
                 realization_id=42,
                 iteration=3,
@@ -263,19 +264,3 @@ class TestExperimentOrchestrator:
         # Verify log movement
         log = storage.get_step_log(config.name, exp_id, 3, 42, "step1", "stdout")
         assert log.strip() == "hello"
-
-    def test_parameter_matrix_to_df(self, orchestrator: ExperimentOrchestrator) -> None:
-        """Test conversion from ParameterMatrix to wide DataFrame."""
-        pm = ParameterMatrix(
-            values={
-                "MULTFLT": {0: 1.0, 1: 2.0},
-                "PORO": {0: 0.1, 1: 0.2, 2: 0.3},
-            },
-        )
-        df = orchestrator._parameter_matrix_to_df(pm)
-
-        assert len(df) == 3
-        assert set(df.columns) == {"realization", "MULTFLT", "PORO"}
-        assert df.filter(pl.col("realization") == 0)["MULTFLT"][0] == 1.0
-        assert df.filter(pl.col("realization") == 2)["MULTFLT"][0] is None
-        assert df.filter(pl.col("realization") == 2)["PORO"][0] == 0.3

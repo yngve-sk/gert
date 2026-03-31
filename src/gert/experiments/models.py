@@ -4,7 +4,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Self
 
-from pydantic import BaseModel, Field, PositiveFloat, model_validator
+import polars as pl
+from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, model_validator
 
 
 class ParameterMetadata(BaseModel):
@@ -50,6 +51,8 @@ type ParameterPayload = dict[int, float | int | str | bool]
 class ParameterMatrix(BaseModel):
     """The deterministic, ensemble-wide prior parameter matrix."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     # Metadata keyed by parameter name.
     metadata: dict[str, ParameterMetadata] = Field(default_factory=dict)
 
@@ -60,6 +63,154 @@ class ParameterMatrix(BaseModel):
     # 2. Out-of-core Datasets (for massive grids and full sheets) pr realization
     # Used for tidy Parquet files containing spatial fields.
     datasets: list[ParameterDataset] = Field(default_factory=list)
+
+    # 3. Optional pre-computed or posterior DataFrame
+    dataframe: pl.DataFrame | None = Field(default=None, exclude=True)
+
+    def get_realizations(self, base_working_directory: Path | None = None) -> set[int]:
+        """Get the set of all realization IDs in this parameter matrix.
+
+        Args:
+            base_working_directory: Optional base path for resolving dataset paths.
+
+        Returns:
+            A set of integer realization IDs.
+        """
+        if self.dataframe is not None:
+            return set(self.dataframe["realization"].to_list())
+
+        realizations: set[int] = set()
+        if self.values:
+            for val_dict in self.values.values():
+                realizations.update(val_dict.keys())
+
+        if self.datasets:
+            for dataset in self.datasets:
+                path_str = dataset.reference.path
+                source_path = Path(path_str)
+                if not source_path.is_absolute():
+                    base_dir = base_working_directory or Path.cwd()
+                    source_path = (base_dir / source_path).resolve()
+
+                if source_path.exists():
+                    # Read just the realization column to be efficient
+                    # if it exists. We load the schema first.
+                    schema = pl.read_parquet_schema(source_path)
+                    if "realization" in schema:
+                        df = (
+                            pl.scan_parquet(source_path)
+                            .select("realization")
+                            .unique()
+                            .collect()
+                        )
+                        realizations.update(df["realization"].to_list())
+
+        return realizations
+
+    def to_df(self, base_working_directory: Path | None = None) -> pl.DataFrame:
+        """Convert ParameterMatrix to a Wide DataFrame.
+
+        Returns:
+            A Polars DataFrame where rows are realizations.
+        """
+        if self.dataframe is not None:
+            return self.dataframe
+
+        # Collect all realization IDs and load dataset DataFrames
+        realizations, dataset_dfs = self._get_dataset_dfs(base_working_directory)
+
+        for val_dict in self.values.values():
+            realizations.update(val_dict.keys())
+
+        if not realizations:
+            return pl.DataFrame({"realization": []})
+
+        # Build initial DataFrame from inline values
+        rows = []
+        for r_id in sorted(realizations):
+            row: dict[str, Any] = {"realization": r_id}
+            for key, val_dict in self.values.items():
+                if r_id in val_dict:
+                    row[key] = val_dict[r_id]
+            rows.append(row)
+
+        df = pl.DataFrame(rows)
+
+        # Merge in the dataset fields
+        return self._merge_datasets(df, dataset_dfs)
+
+    def _get_dataset_dfs(
+        self,
+        base_working_directory: Path | None,
+    ) -> tuple[set[int], list[tuple[ParameterDataset, pl.DataFrame]]]:
+        """Load DataFrames for all datasets and collect realization IDs."""
+        realizations: set[int] = set()
+        dataset_dfs: list[tuple[ParameterDataset, pl.DataFrame]] = []
+
+        for dataset in self.datasets:
+            path_str = dataset.reference.path
+            source_path = Path(path_str)
+            if not source_path.is_absolute():
+                base_dir = base_working_directory or Path.cwd()
+                source_path = (base_dir / source_path).resolve()
+
+            if source_path.exists():
+                df = pl.read_parquet(source_path)
+                if "realization" in df.columns:
+                    realizations.update(df["realization"].unique().to_list())
+                dataset_dfs.append((dataset, df))
+
+        return realizations, dataset_dfs
+
+    def _merge_datasets(
+        self,
+        df: pl.DataFrame,
+        dataset_dfs: list[tuple[ParameterDataset, pl.DataFrame]],
+    ) -> pl.DataFrame:
+        """Merge loaded dataset DataFrames into the main DataFrame."""
+        result_df = df
+        for dataset, ds_df in dataset_dfs:
+            if dataset.index_columns:
+                ds_df = ds_df.sort(["realization", *dataset.index_columns])
+
+                # Group by realization and aggregate parameters into Lists
+                agg_exprs = [pl.col(p) for p in dataset.parameters]
+                grouped = ds_df.group_by("realization", maintain_order=True).agg(
+                    agg_exprs,
+                )
+
+                result_df = result_df.join(grouped, on="realization", how="left")
+            else:
+                # Just join directly
+                result_df = result_df.join(
+                    ds_df.select(["realization", *dataset.parameters]),
+                    on="realization",
+                    how="left",
+                )
+        return result_df
+
+    def replace_values_from_df(self, df: pl.DataFrame) -> Self:
+        """Create a new ParameterMatrix representing the state in the DataFrame.
+
+        Preserves metadata and out-of-core dataset references.
+
+        Args:
+            df: A Polars DataFrame containing updated parameter values, where each row
+                corresponds to a realization and each column to a parameter.
+
+        Returns:
+            A new ParameterMatrix instance.
+        """
+        # We don't want to convert massive grids back into inline dictionaries.
+        # So we just store the DataFrame directly.
+        return type(
+            self,
+        )(
+            metadata=self.metadata,
+            values=self.values,  # Defer to dataframe for actual values
+            datasets=self.datasets,
+            dataframe=df,
+        )
 
 
 class Observation(BaseModel):

@@ -114,8 +114,14 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
                 json=payload,
             )
 
-    worker = ConsolidationWorker(Path("./permanent_storage"))
-    worker.consolidate(config_data["name"], execution_id)
+    ensemble_path = (
+        Path("./permanent_storage")
+        / config_data["name"]
+        / execution_id
+        / f"iter-{iteration}"
+    )
+    worker = ConsolidationWorker.get_instance(ensemble_path)
+    await worker.consolidate()
 
     # 4. Verify consolidated data
     response = client.get(

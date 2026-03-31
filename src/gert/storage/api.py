@@ -14,15 +14,20 @@ class StorageAPI:
         """Initialize the query API with a base storage path."""
         self._base_storage_path = base_storage_path
 
-    def flush(self, experiment_id: str, execution_id: str, iteration: int) -> bool:
+    async def flush(
+        self,
+        experiment_id: str,
+        execution_id: str,
+        iteration: int,
+    ) -> bool:
         """Forces the Consolidator to drain the queue entirely before returning."""
-        worker = ConsolidationWorker(self._base_storage_path)
-        queue_dir = (
+        ensemble_path = (
             self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
         )
+        worker = ConsolidationWorker.get_instance(ensemble_path)
 
-        if queue_dir.exists():
-            worker.consolidate_ensemble(queue_dir)
+        if ensemble_path.exists():
+            await worker.consolidate()
         return True
 
     def get_responses(
@@ -228,3 +233,16 @@ class StorageAPI:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"{step_name}.{log_type}"
         log_file.write_text(content, encoding="utf-8")
+
+    async def consolidate(self, experiment_id: str, execution_id: str) -> None:
+        """Manually trigger consolidation for an experiment/execution."""
+        execution_dir = self._base_storage_path / experiment_id / execution_id
+        if not execution_dir.exists():
+            return
+
+        for ensemble_path in execution_dir.iterdir():
+            if not ensemble_path.is_dir():
+                continue
+
+            worker = ConsolidationWorker.get_instance(ensemble_path)
+            await worker.consolidate()

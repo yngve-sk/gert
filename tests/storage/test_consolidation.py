@@ -18,19 +18,23 @@ def storage_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def worker(storage_path: Path) -> ConsolidationWorker:
     """Provide a ConsolidationWorker instance."""
+    # Note: This default worker is initialized with a dummy path.
+    # Tests should initialize their own worker with the correct ensemble_path.
     return ConsolidationWorker(storage_path)
 
 
-def test_consolidate_heterogeneous_records(
-    worker: ConsolidationWorker,
+@pytest.mark.asyncio
+async def test_consolidate_heterogeneous_records(
     storage_path: Path,
 ) -> None:
     """Prove that the worker routes different JSONL records to different schema tables
     and maintains a schemas.json registry.
     """
-    queue_dir = storage_path / "test_exp" / "run_1" / "iter-0"
-    queue_dir.mkdir(parents=True)
-    queue_file = queue_dir / "ingestion_queue.jsonl"
+    ensemble_path = storage_path / "test_exp" / "run_1" / "iter-0"
+    ensemble_path.mkdir(parents=True)
+    queue_file = ensemble_path / "ingestion_queue.jsonl"
+
+    worker = ConsolidationWorker.get_instance(ensemble_path)
 
     # 1. Write mixed schema records to the queue
     records = [
@@ -43,14 +47,16 @@ def test_consolidate_heterogeneous_records(
         {"realization": 0, "key": {"x": 1, "y": 2, "z": 3}, "value": 0.25},
     ]
 
-    with Path(queue_file).open("w", encoding="utf-8") as f:
-        f.writelines(json.dumps(r) + "\n" for r in records)
+    Path(queue_file).write_text(
+        encoding="utf-8",
+        data="".join(json.dumps(r) + "\n" for r in records),
+    )
 
     # 2. Execute consolidation
-    worker.consolidate_ensemble(queue_dir)
+    await worker.consolidate()
 
     # 3. Assertions
-    resp_dir = queue_dir / "responses"
+    resp_dir = ensemble_path / "responses"
     assert resp_dir.exists()
 
     # Check for parquet files (hashes will be deterministic)
@@ -58,14 +64,16 @@ def test_consolidate_heterogeneous_records(
     assert len(parquet_files) == 3
 
 
-def test_consolidate_upsert_logic(
-    worker: ConsolidationWorker,
+@pytest.mark.asyncio
+async def test_consolidate_upsert_logic(
     storage_path: Path,
 ) -> None:
     """Prove that the worker correctly upserts (updates) existing data with newer records."""
-    queue_dir = storage_path / "test_upsert" / "run_1" / "iter-0"
-    queue_dir.mkdir(parents=True)
-    queue_file = queue_dir / "ingestion_queue.jsonl"
+    ensemble_path = storage_path / "test_upsert" / "run_1" / "iter-0"
+    ensemble_path.mkdir(parents=True)
+    queue_file = ensemble_path / "ingestion_queue.jsonl"
+
+    worker = ConsolidationWorker.get_instance(ensemble_path)
 
     # 1. Initial consolidation
     Path(queue_file).write_text(
@@ -74,7 +82,7 @@ def test_consolidate_upsert_logic(
         + "\n",
     )
 
-    worker.consolidate_ensemble(queue_dir)
+    await worker.consolidate()
 
     # 2. Second consolidation with updated value for same key
     Path(queue_file).write_text(
@@ -83,10 +91,10 @@ def test_consolidate_upsert_logic(
         + "\n",
     )
 
-    worker.consolidate_ensemble(queue_dir)
+    await worker.consolidate()
 
     # 3. Assertion: should only have 1 row with the newest value
-    resp_dir = queue_dir / "responses"
+    resp_dir = ensemble_path / "responses"
     filename = next(iter(resp_dir.glob("*.parquet")))
     df = pl.read_parquet(resp_dir / filename)
 
