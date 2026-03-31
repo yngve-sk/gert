@@ -5,7 +5,7 @@ This document defines the core Python modules and abstract interfaces for the Ge
 ---
 
 ## 1. `gert.experiments` (Core Data Structures & Immutable State)
-This module contains the strictly defined, domain-agnostic Pydantic models (or dataclasses) that represent the data at rest. These objects are purely data; they contain no execution logic.
+This module contains the strictly defined, domain-agnostic Pydantic models (or dataclasses) that represent the data at rest. These objects are purely data; they contain no execution or control logic, though they may contain pure data transformation methods (e.g., `to_df()`) to provide alternative representations.
 
 * **`ExperimentConfig`**: The root immutable artifact. Contains the forward model steps, queue configurations, and a hard link to the initial `ParameterMatrix`.
 * **`ParameterMatrix`**: A 2D deterministic dataset representing the exact values to inject into realizations.
