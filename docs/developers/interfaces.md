@@ -11,6 +11,7 @@ This module contains the strictly defined, domain-agnostic Pydantic models (or d
 * **`ParameterMatrix`**: A 2D deterministic dataset representing the exact values to inject into realizations.
 * **`ObservationSet`**: A collection of expected responses mapped to physical/synthetic truth, fundamentally requiring `value` and `std_dev`.
 * **`IngestionPayload`**: The generic JSON schema expected from forward models (e.g., `{"realization": int, "step": str, "data": dict}`).
+* **`UpdateMetadata`**: The schema capturing the state and configuration of a mathematical update step (`status`, `algorithm`, `configuration`, `metrics` like prior/posterior variance, `error`, `duration`).
 
 ---
 
@@ -27,6 +28,8 @@ This module isolates all high-throughput disk I/O, message queuing, and Parquet 
     * `get_parameters(experiment_id: str, execution_id: str, iteration: int) -> DataFrame`
     * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None) -> DataFrame`
     * `flush(experiment_id: str, execution_id: str, iteration: int) -> bool`: Forces the Consolidator to drain the queue entirely before returning.
+    * `get_update_metadata(experiment_id: str, execution_id: str, iteration: int) -> UpdateMetadata`: Retrieves the state, configuration, and metrics of the mathematical update that produced this iteration.
+    * `write_update_metadata(experiment_id: str, execution_id: str, iteration: int, metadata: UpdateMetadata) -> None`: Writes the metadata of the mathematical update to the *posterior* iteration's storage directory (`iter-{iteration}/update_metadata.json`).
 
 ---
 
@@ -70,7 +73,7 @@ An isolated module dedicated purely to probability distributions and matrix gene
 This module exposes the internal modules as network services and manages their execution topologies.
 
 * **`app.py` (FastAPI Applications)**
-    * Maps HTTP endpoints (`POST /experiments`, `GET /storage/...`) to internal controllers.
+    * Maps HTTP endpoints (`POST /experiments`, `GET /storage/...`, `GET /experiments/{exp_id}/executions/{exec_id}/ensembles/{iteration}/update/metadata`) to internal controllers.
     * Maps WebSocket endpoints (`WS /events`) to the state tracker.
 * **`ProcessManager`**
     * `boot_production()`: Spawns the Storage app, Experiment Runner app, and Parameters app in isolated OS processes.
