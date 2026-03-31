@@ -11,12 +11,13 @@ These principles guide our immediate priorities for system hardening and should 
 ## 1. Network & Ingestion Failures (Forward Models -> Server)
 
 **The Problem:**
-Forward models (user-provided executables) are transient and run in isolated environments. If they attempt to send their simulated responses back to the GERT server and the network blips, the server is restarting, or the request times out, the forward model often exits. The orchestrator may see the job complete (exit code 0) but the expected data is missing, leading to downstream mathematical crashes.
+Forward models (user-provided executables) are transient and run in isolated environments. If they attempt to send their simulated responses back to the GERT server and the network blips, the server is restarting, or the request times out, the forward model often exits. The orchestrator may see the job complete (exit code 0 via the job scheduler) but the expected data is missing, leading to downstream mathematical crashes.
 
 **Design Principles:**
 *   **Robust Client SDK:** Forward models should not rely on raw HTTP requests (`httpx`, `requests`, `curl`). GERT must provide a standardized, lightweight client utility (e.g., `gert.client`) that handles authentication, routing, and data serialization.
-*   **Mandatory Retries (Exponential Backoff):** The client SDK must implement robust retry logic. If the server is unreachable or returns a 50x error, the client must retry with exponential backoff (e.g., using `tenacity` or `urllib3` retry adapters) for a generous configurable period before giving up.
-*   **Fail-Fast Job Exits:** If a forward model ultimately cannot ingest its data after exhausting all retries, it **must** exit with a non-zero error code (e.g., `sys.exit(1)`). This signals to the job scheduler (PSI/J) and the orchestrator that the realization *failed*, preventing the system from falsely assuming success and proceeding with missing data.
+*   **Mandatory Retries (Exponential Backoff):** The client SDK must implement robust retry logic. If the server is unreachable or returns a 50x error, the client must retry with exponential backoff for a generous configurable period before giving up.
+*   **Application-Level Completion Signals:** The orchestrator must not rely on the OS-level exit code (via PSI/J) to determine if a job succeeded. The SDK must explicitly send a `POST /complete` signal *after* all data is successfully ingested. If the job catches an error, it should send a `POST /fail` signal with the traceback.
+*   **Fail-Fast Job Exits:** If a forward model ultimately cannot ingest its data after exhausting all retries, it **must** exit with a non-zero error code (e.g., `sys.exit(1)`).
 
 ---
 
@@ -26,10 +27,10 @@ Forward models (user-provided executables) are transient and run in isolated env
 The orchestrator relies on counting job completion events to advance to the math update phase. If jobs fail, finish too fast (before state is initialized), or take days in an HPC queue, the orchestrator's state machine can hang, crash, or proceed prematurely.
 
 **Design Principles:**
+*   **Hybrid State Tracking (HTTP + Scheduler):** The orchestrator's state machine should be primarily driven by the HTTP `/complete` and `/fail` signals sent by the SDK. PSI/J acts strictly as a *fallback supervisor* (a dead man's switch). If PSI/J reports a job failed or was killed (e.g., OOM kill, hardware failure) before the HTTP signal arrives, the orchestrator marks it as failed. If PSI/J reports success but no HTTP `/complete` was received, it is treated as a silent failure.
 *   **Deterministic State Initialization:** The orchestrator must completely initialize all synchronization primitives (e.g., `asyncio.Event`, tracking dictionaries, expected counts) for an iteration *before* dispatching the first job.
-*   **Explicit Success vs. Failure Tracking:** The orchestrator must distinguish between `successful_realizations` and `failed_realizations`. A job that exits with an error must not be counted towards the "ready for math update" threshold.
-*   **Iteration Short-Circuiting (Fail-Fast):** If a critical threshold of realizations fails (or even a single one, depending on configuration), the orchestrator should gracefully halt the iteration, cancel pending jobs, and mark the overall execution state as `FAILED`. It should log a clear summary of which realizations failed rather than proceeding to a mathematical crash.
-*   **Scheduler-Driven Timeouts:** The orchestrator should not use hardcoded local timeouts (e.g., 120 seconds) for waiting on jobs. In HPC environments, jobs may queue for days. Timeouts must be either completely disabled (relying on the cluster's walltime limits) or explicitly configurable via `ExperimentConfig.queue_config.walltime`.
+*   **Iteration Short-Circuiting (Fail-Fast):** If a critical threshold of realizations fails (or even a single one, depending on configuration), the orchestrator should gracefully halt the iteration, cancel pending jobs, and mark the overall execution state as `FAILED`.
+*   **Scheduler-Driven Timeouts:** The orchestrator should not use hardcoded local timeouts (e.g., 120 seconds) for waiting on jobs. Timeouts must be explicitly configurable via `ExperimentConfig.queue_config.walltime`, deferring to the HPC scheduler's limits where possible.
 
 ---
 
