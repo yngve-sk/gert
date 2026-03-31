@@ -26,6 +26,11 @@ The application will be built using a multi-pane layout:
 
 *   **Navigation & Detail View (Bottom Pane):**
     *   **Hierarchical Navigation (Tree/Table):** A navigable widget with the structure `Experiment -> Iteration -> Realization -> Step`. This allows the user to drill down into the specific parts and execution steps of the experiment.
+    *   **Mathematical Updates:** To accurately reflect the experiment's macro flow, mathematical update steps must be explicitly represented in the tree view. They should appear in between iterations (e.g., after the realizations of Iteration 0 and before Iteration 1). Selecting an update node should display its status, logs (`stdout`/`stderr`), and execution details in the Detail Viewer.
+    *   **Update Storage & API:**
+        *   **Storage Location:** Update metadata and logs for iteration `i` (which produces the iteration `i+1` parameters) must be stored within the directory of its posterior ensemble: `iter-{i+1}/`.
+        *   **UpdateMetadata Model:** A dedicated `UpdateMetadata` Pydantic model will track the algorithm name, its configuration arguments, execution status (`RUNNING`, `COMPLETED`, `FAILED`), timing/error information, and mathematical metrics (e.g., prior variance, posterior variance).
+        *   **API Exposure:** A new endpoint `GET /experiments/{exp_id}/executions/{exec_id}/ensembles/{it}/update/metadata` will provide this information, allowing the monitor to display both the progress and the mathematical summary of the update.
     *   **Expand All:** A shortcut key ('e') is provided to expand/collapse all realizations, showing all forward model steps at once.
     *   **Detail Viewer (Response/Logs):**
         *   **Realization Selected:** Displays the content of the last response JSON received for that specific realization.
