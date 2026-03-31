@@ -56,4 +56,5 @@ This document outlines the core architectural constraints and design rules that 
 
 ### Rule 14: Separation of Data and Control
 * Core data models must not contain control logic or environment-specific validation.
-* Data models, such as ExperimentConfig, should represent the data and its constraints. Any logic that interacts with the execution environment, such as validating file paths or permissions, belongs in the control layer (e.g., the ). This separation ensures that the data models remain portable and that the backend can be modified without affecting the core data structures.
+* Data models, such as `ExperimentConfig` or `ParameterMatrix`, should represent the data and its constraints. Any logic that interacts with the execution environment, such as validating file paths or permissions, belongs in the control layer (e.g., the orchestration engine). This separation ensures that the data models remain portable and that the backend can be modified without affecting the core data structures.
+* **Pure Data Transformations:** It is permissible for core data models to contain pure data transformation methods (e.g., `to_df()`, `replace_values_from_df()`) that provide alternative representations of the internal state. These methods must be free of side-effects, I/O operations, or external dependencies beyond standard data processing libraries.
