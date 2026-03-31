@@ -18,6 +18,7 @@ GERT is a fully type-annotated codebase. We use modern Python 3.10+ type hinting
 * **Validation:** All code must pass strict type checking using `mypy --strict` (or `pyright` in strict mode).
 * **No Implicit `Any`:** Avoid using `Any` unless interfacing with completely untyped external legacy libraries. If you must use `Any`, add a `# type: ignore` comment explaining why.
 * **Signatures:** Every function and method signature must have fully annotated arguments and a defined return type. (e.g., `def do_something() -> None:`).
+* **No Untyped Dictionaries for State:** Avoid using raw standard dictionaries (`dict[str, Any]`) to represent structured state, configurations, or complex data payloads. Instead, strongly type all data structures using Pydantic `BaseModel` (preferred, for validation and defaults) or `TypedDict`. Dictionaries should only be used for arbitrary mappings where the keys are truly variable.
 
 ## 3. Pre-commit Hooks
 All developers must install and use the `pre-commit` framework to ensure no malformed code enters the repository.
@@ -77,3 +78,4 @@ All code must be written so that it is easily and quickly unit-testable. To achi
 * Write at most 2 expressions in an assertion, respecting PT018.
 * All code must pass pre-commit validation before submission.
 * Dont do local imports unless necessary
+* **Prefer Immutability and Reassignment over In-Place Deletion:** When updating state structures (like dictionaries or lists) with new datasets, prefer reassigning the key to a newly constructed object rather than manually iterating and using `del` or `.pop()` to mutate the existing collection in-place. This makes the intent explicit, reduces the risk of concurrent modification bugs, and keeps the code less "twisted".
