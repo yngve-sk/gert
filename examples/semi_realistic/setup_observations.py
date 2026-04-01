@@ -37,7 +37,7 @@ def main() -> None:
             val = float(influence * (1.0 + 0.1 * t))
             observations.append(
                 {
-                    "key": {"well": w_name, "time": str(t)},
+                    "key": {"response": "FOPR", "well": w_name, "time": str(t)},
                     "value": val,
                     "std_dev": val * 0.05,  # 5% relative error
                 },

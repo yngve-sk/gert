@@ -1,6 +1,7 @@
 [
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "1"
     },
@@ -9,6 +10,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "2"
     },
@@ -17,6 +19,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "3"
     },
@@ -25,6 +28,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "4"
     },
@@ -33,6 +37,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "5"
     },
@@ -41,6 +46,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "6"
     },
@@ -49,6 +55,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "7"
     },
@@ -57,6 +64,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "8"
     },
@@ -65,6 +73,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "9"
     },
@@ -73,6 +82,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W1",
       "time": "10"
     },
@@ -81,6 +91,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "1"
     },
@@ -89,6 +100,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "2"
     },
@@ -97,6 +109,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "3"
     },
@@ -105,6 +118,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "4"
     },
@@ -113,6 +127,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "5"
     },
@@ -121,6 +136,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "6"
     },
@@ -129,6 +145,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "7"
     },
@@ -137,6 +154,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "8"
     },
@@ -145,6 +163,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "9"
     },
@@ -153,6 +172,7 @@
   },
   {
     "key": {
+      "response": "FOPR",
       "well": "W2",
       "time": "10"
     },

@@ -484,3 +484,29 @@ class StorageAPI:
 
             worker = ConsolidationWorker.get_instance(ensemble_path)
             await worker.consolidate()
+
+    def get_manifest(
+        self,
+        experiment_id: str,
+        execution_id: str,
+        iteration: int,
+    ) -> dict[str, float]:
+        """Lightweight cache-busting endpoint returning modification timestamps."""
+        iter_dir = (
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
+        )
+        manifest = {}
+
+        params_file = iter_dir / "parameters.parquet"
+        if params_file.exists():
+            manifest["parameters"] = params_file.stat().st_mtime
+
+        resps_dir = iter_dir / "responses"
+        if resps_dir.exists():
+            parquet_files = list(resps_dir.glob("*.parquet"))
+            if parquet_files:
+                manifest["responses"] = max(f.stat().st_mtime for f in parquet_files)
+            else:
+                manifest["responses"] = resps_dir.stat().st_mtime
+
+        return manifest

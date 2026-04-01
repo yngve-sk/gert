@@ -93,7 +93,7 @@ async def test_run_experiment_loop_flow(
         resp_path.mkdir(exist_ok=True)
         # Create a dummy parquet file that StorageAPI.get_responses will find
         pl.DataFrame(
-            {"realization": [0], "value": [10.0], "key": ["FOPR"]},
+            {"realization": [0], "value": [10.0], "response": ["FOPR"]},
         ).write_parquet(
             resp_path / "data_dummy.parquet",
         )
@@ -117,7 +117,7 @@ async def test_run_experiment_loop_flow(
         resp1_path = iter1_path / "responses"
         resp1_path.mkdir(exist_ok=True)
         pl.DataFrame(
-            {"realization": [0], "value": [11.0], "key": ["FOPR"]},
+            {"realization": [0], "value": [11.0], "response": ["FOPR"]},
         ).write_parquet(
             resp1_path / "data_dummy.parquet",
         )

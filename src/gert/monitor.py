@@ -17,6 +17,7 @@ from textual.widgets import Footer, Header, Label, ProgressBar, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from gert.experiments.models import ObservationSummary, UpdateMetadata
+from gert.plotter import PlotterScreen
 
 
 class StepState(BaseModel):
@@ -229,7 +230,22 @@ class GertMonitorApp(App[None]):
     BINDINGS: ClassVar[list[Any]] = [
         ("q", "quit", "Quit"),
         ("e", "expand_all", "Expand/Collapse All"),
+        ("p", "toggle_plotter", "Plotter"),
     ]
+
+    def action_toggle_plotter(self) -> None:
+        """Open the plotter screen for the selected node."""
+        if not self._selected_item:
+            return
+
+        self.push_screen(
+            PlotterScreen(
+                self.api_url,
+                self.experiment_id,
+                self.execution_id,
+                self._selected_item,
+            ),
+        )
 
     def __init__(
         self,

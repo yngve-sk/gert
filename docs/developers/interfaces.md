@@ -9,8 +9,8 @@ This module contains the strictly defined, domain-agnostic Pydantic models (or d
 
 * **`ExperimentConfig`**: The root immutable artifact. Contains the forward model steps, queue configurations, and a hard link to the initial `ParameterMatrix`.
 * **`ParameterMatrix`**: A 2D deterministic dataset representing the exact values to inject into realizations.
-* **`ObservationSet`**: A collection of expected responses mapped to physical/synthetic truth, fundamentally requiring `value` and `std_dev`.
-* **`IngestionPayload`**: The generic JSON schema expected from forward models (e.g., `{"realization": int, "step": str, "data": dict}`).
+* **`ObservationSet`**: A collection of expected responses mapped to physical/synthetic truth, fundamentally requiring `value`, `std_dev`, and a `key` dict. **Rule:** The `key` dict must *always* contain a `"response"` attribute (e.g., `{"response": "FOPR", "well": "W1"}`). For 1D/time-series data, `"response"` is the variable name (like `FOPR`). For nD data, `"response"` is the dataset name, and further details are given by `x, y, z`, etc.
+* **`IngestionPayload`**: The generic JSON schema expected from forward models (e.g., `{"realization": 42, "source_step": "sim", "key": {"response": "FOPR"}, "value": 100.0}`).
 * **`UpdateMetadata`**: The schema capturing the state and configuration of a mathematical update step (`status`, `algorithm`, `configuration`, `metrics` like prior/posterior variance, `error`, `duration`).
 * **`ObservationSummary`**: The schema capturing the aggregate statistics on how responses and observations deviate. Computes the `average_absolute_residual`, the bounded `average_normalized_residual` (-1, 1), and `average_absolute_misfit`.
 
@@ -28,6 +28,7 @@ This module isolates all high-throughput disk I/O, message queuing, and Parquet 
 * **`StorageQueryAPI` (Interface)**
     * `get_parameters(experiment_id: str, execution_id: str, iteration: int) -> DataFrame`
     * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None) -> DataFrame`
+    * `get_manifest(experiment_id: str, execution_id: str, iteration: int) -> dict[str, float]`: Lightweight cache-busting endpoint returning the latest `.parquet` modification timestamps.
     * `flush(experiment_id: str, execution_id: str, iteration: int) -> bool`: Forces the Consolidator to drain the queue entirely before returning.
     * `get_update_metadata(experiment_id: str, execution_id: str, iteration: int) -> UpdateMetadata`: Retrieves the state, configuration, and metrics of the mathematical update that produced this iteration.
     * `write_update_metadata(experiment_id: str, execution_id: str, iteration: int, metadata: UpdateMetadata) -> None`: Writes the metadata of the mathematical update to the *posterior* iteration's storage directory (`iter-{iteration}/update_metadata.json`).
