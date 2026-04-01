@@ -12,6 +12,7 @@ This module contains the strictly defined, domain-agnostic Pydantic models (or d
 * **`ObservationSet`**: A collection of expected responses mapped to physical/synthetic truth, fundamentally requiring `value` and `std_dev`.
 * **`IngestionPayload`**: The generic JSON schema expected from forward models (e.g., `{"realization": int, "step": str, "data": dict}`).
 * **`UpdateMetadata`**: The schema capturing the state and configuration of a mathematical update step (`status`, `algorithm`, `configuration`, `metrics` like prior/posterior variance, `error`, `duration`).
+* **`ObservationSummary`**: The schema capturing the aggregate statistics on how responses and observations deviate. Computes the `average_absolute_residual`, the bounded `average_normalized_residual` (-1, 1), and `average_absolute_misfit`.
 
 ---
 
