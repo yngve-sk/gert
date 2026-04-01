@@ -332,6 +332,38 @@ class UpdateStep(BaseModel):
     updatable_parameters: list[str] = Field(default_factory=list)
 
 
+class ObservationDetail(BaseModel):
+    """Detailed observation mismatch statistics for a specific observation."""
+
+    response: str | None = None
+    key: dict[str, str] = Field(default_factory=dict)
+    absolute_residual: float
+    normalized_misfit: float
+    absolute_misfit: float
+
+
+class ObservationSummary(BaseModel):
+    """Summary of observation mismatches across an iteration."""
+
+    average_absolute_residual: float
+    average_normalized_misfit: float
+    average_absolute_misfit: float
+    details: list[ObservationDetail]
+
+
+class UpdateMetadata(BaseModel):
+    """The schema for a mathematical update step."""
+
+    status: str
+    algorithm_name: str
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    duration_seconds: float | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+
+
 class ExperimentConfig(BaseModel):
     """Immutable root configuration for a GERT experiment."""
 

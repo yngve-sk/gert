@@ -3,9 +3,11 @@ import functools
 import json
 import logging
 import os
+import time
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from gert.experiments.models import (
     ExecutionState,
     ExperimentConfig,
     ParameterMatrix,
+    UpdateMetadata,
 )
 from gert.plugins.plugins import GertRuntimePlugins
 from gert.storage.api import StorageAPI
@@ -399,12 +402,77 @@ class ExperimentOrchestrator:
 
             # 4. Perform Update (if not the last iteration)
             if i < num_updates:
+                update_step = self._config.updates[i]
+                start_ts = time.time()
+                metadata = UpdateMetadata(
+                    algorithm_name=update_step.algorithm,
+                    status="RUNNING",
+                    configuration=update_step.arguments,
+                    start_time=datetime.now(tz=UTC).isoformat(),
+                )
+
+                if self._storage_api:
+                    self._storage_api.write_update_metadata(
+                        self._config.name,
+                        self._execution_id,
+                        i + 1,
+                        metadata,
+                    )
+
                 try:
+                    # Fetch dependencies early for metrics
+                    prior_df = self._storage_api.get_parameters(
+                        self._config.name,
+                        self._execution_id,
+                        i,
+                    )
+
+                    summary_data = self._storage_api.get_observation_summary(
+                        self._config.name,
+                        self._execution_id,
+                        i,
+                    )
+                    misfit = (
+                        summary_data.average_normalized_misfit if summary_data else 0.0
+                    )
+                    prior_var = self._calculate_variance(prior_df)
+
                     # perform_update returns a Wide DataFrame
                     updated_params_df = await self.perform_update(i)
-                except Exception:
+
+                    posterior_var = self._calculate_variance(updated_params_df)
+
+                    metadata.metrics = {
+                        "misfit_bias": misfit,
+                        "prior_variance": prior_var,
+                        "posterior_variance": posterior_var,
+                    }
+                    metadata.status = "COMPLETED"
+
+                except Exception as e:
                     logger.exception(f"Failed to perform update at iteration {i}")
+                    metadata.status = "FAILED"
+                    metadata.error = str(e)
+                    if self._storage_api:
+                        metadata.end_time = datetime.now(tz=UTC).isoformat()
+                        metadata.duration_seconds = time.time() - start_ts
+                        self._storage_api.write_update_metadata(
+                            self._config.name,
+                            self._execution_id,
+                            i + 1,
+                            metadata,
+                        )
                     raise
+                finally:
+                    if self._storage_api and metadata.status == "COMPLETED":
+                        metadata.end_time = datetime.now(tz=UTC).isoformat()
+                        metadata.duration_seconds = time.time() - start_ts
+                        self._storage_api.write_update_metadata(
+                            self._config.name,
+                            self._execution_id,
+                            i + 1,
+                            metadata,
+                        )
 
                 # Write posterior parameters to storage for the NEXT iteration
                 self._storage_api.write_parameters(
@@ -456,17 +524,23 @@ class ExperimentOrchestrator:
                 continue
             if self._pause_requested:
                 break
-            job_id = self.evaluate_forward_model(r_id, iteration)
+            job_id = self.evaluate_forward_model(r_id, iteration, parameters)
             self._active_jobs[iteration][r_id] = job_id
 
         self._save_execution_state("RUNNING", iteration)
 
-    def evaluate_forward_model(self, realization_id: int, iteration: int) -> str:
+    def evaluate_forward_model(
+        self,
+        realization_id: int,
+        iteration: int,
+        parameters: ParameterMatrix,
+    ) -> str:
         """Submit the forward model for a single realization.
 
         Args:
             realization_id: The ID of the realization to run.
             iteration: The current iteration number.
+            parameters: The parameter matrix for this iteration.
 
         Returns:
             The job ID from the job submitter.
@@ -489,7 +563,7 @@ class ExperimentOrchestrator:
             realization=realization_id,
         )
 
-        self._inject_parameters(workdir, realization_id)
+        self._inject_parameters(workdir, realization_id, parameters)
 
         # Build commands from config steps
         execution_steps = self._prepare_execution_steps(iteration, realization_id)
@@ -622,11 +696,16 @@ class ExperimentOrchestrator:
 
         return _status_cb
 
-    def _inject_parameters(self, workdir: Path, realization_id: int) -> None:
+    def _inject_parameters(  # noqa: C901
+        self,
+        workdir: Path,
+        realization_id: int,
+        parameters: ParameterMatrix,
+    ) -> None:
         """Inject parameters.json and field datasets into the realization workdir."""
         # 1. Inject scalar values into parameters.json
         params = {}
-        for key, val_dict in self._config.parameter_matrix.values.items():
+        for key, val_dict in parameters.values.items():
             if realization_id in val_dict:
                 params[key] = val_dict[realization_id]
 
@@ -634,7 +713,7 @@ class ExperimentOrchestrator:
             json.dump(params, f)
 
         # 2. Inject field datasets (ParameterDataset)
-        for i, dataset in enumerate(self._config.parameter_matrix.datasets):
+        for i, dataset in enumerate(parameters.datasets):
             source_path = Path(dataset.reference.path)
             if not source_path.is_absolute():
                 source_path = (
@@ -644,7 +723,7 @@ class ExperimentOrchestrator:
             if not source_path.exists():
                 continue
 
-            # Load the full dataset (all realizations)
+            # Load the prior base dataset
             df = pl.read_parquet(source_path)
 
             # Filter for this specific realization
@@ -655,8 +734,26 @@ class ExperimentOrchestrator:
                 # Possible in partitioned schemes.
                 real_df = df
 
+            # Sort indices to match models.py `_merge_datasets` alignment
+            if dataset.index_columns:
+                real_df = real_df.sort(dataset.index_columns)
+
+            # If the matrix contains updated values, overwrite them here
+            if parameters.dataframe is not None:
+                row_df = parameters.dataframe.filter(
+                    pl.col("realization") == realization_id,
+                )
+                if len(row_df) > 0:
+                    for param in dataset.parameters:
+                        if param in row_df.columns:
+                            # Extract the aggregated array/list
+                            updated_vals = row_df[param].to_list()[0]
+                            # Overwrite the physical parameter
+                            real_df = real_df.with_columns(
+                                pl.Series(name=param, values=updated_vals),
+                            )
+
             # Determine target filename
-            # Use index or some property if we added names to datasets in models.
             target_name = f"field_data_{i}.parquet"
             real_df.write_parquet(workdir / target_name)
 
@@ -820,3 +917,25 @@ class ExperimentOrchestrator:
                 row.update(obs.coordinates)
             data.append(row)
         return pl.DataFrame(data)
+
+    def _calculate_variance(self, df: pl.DataFrame) -> float:
+        """Calculate the average variance of the parameter matrix."""
+        try:
+            numeric_df = df.select(
+                pl.col(pl.Float64, pl.Float32, pl.Int64, pl.Int32).exclude(
+                    "realization",
+                ),
+            )
+            if len(numeric_df.columns) == 0:
+                return 0.0
+
+            variances = numeric_df.var()
+            mean_var = variances.mean_horizontal()
+            return (
+                float(mean_var[0])
+                if len(mean_var) > 0 and mean_var[0] is not None
+                else 0.0
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not calculate variance: {e}")
+            return 0.0

@@ -23,6 +23,8 @@ from gert.experiments.models import (
     ExecutionState,
     ExperimentConfig,
     IngestionPayload,
+    ObservationSummary,
+    UpdateMetadata,
 )
 from gert.storage.api import StorageAPI
 from gert.storage.ingestion import IngestionReceiver
@@ -108,36 +110,43 @@ def _recover_execution(
     execution_id: str,
 ) -> tuple[ExperimentConfig | None, ExecutionState | None]:
     """Recover execution state from persistent storage if it's missing from memory."""
+    config: ExperimentConfig | None = None
+    state: ExecutionState | None = None
+
+    if experiment_id in _experiment_configs:
+        config = _experiment_configs[experiment_id]
+
     if execution_id in _executions_to_configs and execution_id in _execution_states:
         return _executions_to_configs[execution_id], _execution_states[execution_id]
 
     base = Path("./permanent_storage")
-    if not base.exists():
+
+    # Try recovering config first if we don't have it
+    if not config:
+        config_file = base / experiment_id / "config.json"
+        if config_file.exists():
+            try:
+                config = ExperimentConfig.model_validate_json(config_file.read_text())
+                _experiment_configs[experiment_id] = config
+            except Exception:
+                logger.exception("Failed to load experiment config")
+
+    if not config:
         return None, None
 
-    for state_file in base.glob(f"*/{execution_id}/execution_state.json"):
+    # Try recovering state
+    state_file = base / experiment_id / execution_id / "execution_state.json"
+    if state_file.exists():
         try:
-            state = ExecutionState.model_validate_json(
-                state_file.read_text(),
-            )
-            if state.experiment_id == experiment_id:
-                # Load config from experiment level
-                config_file = state_file.parent.parent / "config.json"
-                if not config_file.exists():
-                    logger.error(f"Config file missing for experiment {experiment_id}")
-                    continue
-
-                config = ExperimentConfig.model_validate_json(config_file.read_text())
-
-                _experiment_configs[experiment_id] = config
-                _executions_to_configs[execution_id] = config
-                _execution_states[execution_id] = state
-                return config, state
+            state = ExecutionState.model_validate_json(state_file.read_text())
         except Exception:
             logger.exception("Failed to load execution state")
-            continue
+        else:
+            _executions_to_configs[execution_id] = config
+            _execution_states[execution_id] = state
+            return config, state
 
-    return None, None
+    return config, None
 
 
 @router.post(
@@ -536,11 +545,19 @@ async def get_execution_status(
     Raises:
         HTTPException: If the execution is not found.
     """
-    config, _ = _recover_execution(experiment_id, execution_id)
+    config, state = _recover_execution(experiment_id, execution_id)
+
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Execution '{execution_id}' not found",
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
         )
 
     if execution_id not in _experiment_statuses:
@@ -569,12 +586,19 @@ async def mark_realization_complete(
     Raises:
         HTTPException: If the experiment or execution is not found.
     """
-    config, _ = _recover_execution(experiment_id, execution_id)
+    config, state = _recover_execution(experiment_id, execution_id)
+
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Experiment '{experiment_id}' or execution "
-            f"'{execution_id}' not found",
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
         )
 
     _update_realization_status(
@@ -610,12 +634,19 @@ async def mark_realization_failed(
     Raises:
         HTTPException: If the experiment or execution is not found.
     """
-    config, _ = _recover_execution(experiment_id, execution_id)
+    config, state = _recover_execution(experiment_id, execution_id)
+
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Experiment '{experiment_id}' or execution "
-            f"'{execution_id}' not found",
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
         )
 
     _update_realization_status(
@@ -739,11 +770,19 @@ async def get_step_logs(
     Raises:
         HTTPException: If the experiment or logs are not found.
     """
-    config, _ = _recover_execution(experiment_id, execution_id)
+    config, state = _recover_execution(experiment_id, execution_id)
+
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
         )
 
     api = StorageAPI(base_storage_path=config.storage_base)
@@ -789,13 +828,19 @@ async def ingest_data(
     Raises:
         HTTPException: If the experiment is not found.
     """
-    config, _ = _recover_execution(experiment_id, execution_id)
+    config, state = _recover_execution(experiment_id, execution_id)
 
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Experiment '{experiment_id}' or execution "
-            f"'{execution_id}' not found",
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
         )
 
     receiver = IngestionReceiver(base_storage_path=config.storage_base)
@@ -823,12 +868,19 @@ async def get_parameters(
     Raises:
         HTTPException: If the experiment is not found.
     """
-    config, _ = _recover_execution(experiment_id, execution_id)
+    config, state = _recover_execution(experiment_id, execution_id)
 
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
         )
 
     api = StorageAPI(base_storage_path=config.storage_base)
@@ -862,13 +914,19 @@ async def get_responses(
     Raises:
         HTTPException: If the experiment or data is not found.
     """
-    config, _ = _recover_execution(experiment_id, execution_id)
+    config, state = _recover_execution(experiment_id, execution_id)
 
     if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Experiment '{experiment_id}' or execution "
-            f"'{execution_id}' not found",
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
         )
 
     api = StorageAPI(base_storage_path=config.storage_base)
@@ -884,3 +942,81 @@ async def get_responses(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         ) from e
+
+
+@router.get(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/update/metadata",
+    summary="Retrieve update metadata",
+    description="Returns the metadata for the update that produced this iteration.",
+)
+async def get_update_metadata(
+    experiment_id: str,
+    execution_id: str,
+    iteration: int,
+) -> UpdateMetadata:
+    """Retrieve the metadata for a mathematical update.
+
+    Raises:
+        HTTPException: If execution or config not found.
+    """
+    config, state = _recover_execution(experiment_id, execution_id)
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
+        )
+
+    api = StorageAPI(base_storage_path=config.storage_base)
+    try:
+        return api.get_update_metadata(
+            experiment_id=config.name,
+            execution_id=execution_id,
+            iteration=iteration,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+
+@router.get(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/observation_summary",
+    summary="Retrieve iteration observation summary",
+    description="Returns the average deviation statistics for the iteration.",
+)
+async def get_observation_summary(
+    experiment_id: str,
+    execution_id: str,
+    iteration: int,
+) -> ObservationSummary | None:
+    """Retrieve the observation deviation statistics for an iteration.
+
+    Raises:
+        HTTPException: If execution or config not found.
+    """
+    config, state = _recover_execution(experiment_id, execution_id)
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
+        )
+
+    api = StorageAPI(base_storage_path=config.storage_base)
+    return api.get_observation_summary(config.name, execution_id, iteration)
