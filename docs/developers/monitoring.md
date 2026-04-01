@@ -33,6 +33,7 @@ The application will be built using a multi-pane layout:
         *   **ObservationSummary Model:** A dedicated `ObservationSummary` Pydantic model will track the deviations between the true physical observations and the simulated responses for an entire iteration.
         *   **API Exposure:** A new endpoint `GET /experiments/{exp_id}/executions/{exec_id}/ensembles/{it}/observation_summary` will provide this information, allowing the monitor to display both the progress and the mathematical summary of the iteration deviations.
     *   **Expand All:** A shortcut key ('e') is provided to expand/collapse all realizations, showing all forward model steps at once.
+    *   **Plotting Overlay:** Pressing 'p' opens the integrated plotting interface to visualize parameters and responses for the selected scope. See [Plotting Architecture](plotting.md) for detailed UX and architectural rules.
     *   **Detail Viewer (Response/Logs):**
         *   **Realization Selected:** Displays the content of the last response JSON received for that specific realization.
         *   **Step Selected:** Displays the `stdout` and `stderr` logs for the selected step, along with its status and timing information.
