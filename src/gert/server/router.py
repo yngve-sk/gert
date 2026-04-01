@@ -68,6 +68,8 @@ class ExperimentMetadata(BaseModel):
     num_realizations: int
     num_fm_steps: int
     step_names: list[str]
+    num_observations: int = 0
+    num_parameters: int = 0
 
 
 class ExperimentResponse(BaseModel):
@@ -391,6 +393,8 @@ async def get_experiment_metadata(
     num_fm_steps = len(config.forward_model_steps)
     step_names = [s.name for s in config.forward_model_steps]
     num_iterations = len(config.updates) + 1  # Prior + N updates
+    num_observations = len(config.observations)
+    num_parameters = len(config.parameter_matrix.metadata)
 
     return ExperimentMetadata(
         experiment_id=experiment_id,
@@ -399,6 +403,8 @@ async def get_experiment_metadata(
         num_realizations=num_realizations,
         num_fm_steps=num_fm_steps,
         step_names=step_names,
+        num_observations=num_observations,
+        num_parameters=num_parameters,
     )
 
 
