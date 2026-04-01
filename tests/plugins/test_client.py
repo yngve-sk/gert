@@ -33,14 +33,14 @@ def test_ingest_response(
 ) -> None:
     mock_httpx_client.post.return_value = MagicMock(status_code=200)
 
-    gert_client.post_response({"well": "W1"}, 123.45)
+    gert_client.post_response({"response": "well", "well": "W1"}, 123.45)
 
     assert mock_httpx_client.post.called
     args, kwargs = mock_httpx_client.post.call_args
     assert "/ensembles/0/ingest" in args[0]
     payload = kwargs["json"]
     assert payload["realization"] == 42
-    assert payload["key"] == {"well": "W1"}
+    assert payload["key"] == {"response": "well", "well": "W1"}
     assert payload["value"] == 123.45
 
 

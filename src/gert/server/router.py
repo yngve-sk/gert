@@ -305,6 +305,40 @@ async def resume_execution(
 
 
 @router.get(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/manifest",
+    summary="Retrieve data manifest",
+    description="Lightweight cache-busting endpoint returning timestamps.",
+)
+async def get_manifest(
+    experiment_id: str,
+    execution_id: str,
+    iteration: int,
+) -> dict[str, float]:
+    """Retrieve the data manifest for an iteration.
+
+    Raises:
+        HTTPException: If execution or config not found.
+    """
+    config, state = _recover_execution(experiment_id, execution_id)
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' not found",
+        )
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Execution '{execution_id}' not found for experiment '{experiment_id}'"
+            ),
+        )
+
+    api = StorageAPI(base_storage_path=config.storage_base)
+    return api.get_manifest(config.name, execution_id, iteration)
+
+
+@router.get(
     "/experiments/{experiment_id}/config",
     summary="Retrieve experiment configuration",
     description="Returns the immutable configuration for a given experiment ID.",

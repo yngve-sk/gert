@@ -39,12 +39,24 @@ async def test_consolidate_heterogeneous_records(
     # 1. Write mixed schema records to the queue
     records = [
         # Schema 1: Well data (well_id, time)
-        {"realization": 0, "key": {"well_id": "W1", "time": 10.0}, "value": 100.0},
-        {"realization": 1, "key": {"well_id": "W1", "time": 10.0}, "value": 200.0},
+        {
+            "realization": 0,
+            "key": {"response": "well", "well_id": "W1", "time": 10.0},
+            "value": 100.0,
+        },
+        {
+            "realization": 1,
+            "key": {"response": "well", "well_id": "W1", "time": 10.0},
+            "value": 200.0,
+        },
         # Schema 2: Global summary (response_name)
-        {"realization": 0, "key": {"response_name": "FOPR"}, "value": 5000.0},
+        {"realization": 0, "key": {"response": "FOPR"}, "value": 5000.0},
         # Schema 3: Grid data (x, y, z)
-        {"realization": 0, "key": {"x": 1, "y": 2, "z": 3}, "value": 0.25},
+        {
+            "realization": 0,
+            "key": {"response": "grid", "x": 1, "y": 2, "z": 3},
+            "value": 0.25,
+        },
     ]
 
     Path(queue_file).write_text(
@@ -78,7 +90,13 @@ async def test_consolidate_upsert_logic(
     # 1. Initial consolidation
     Path(queue_file).write_text(
         encoding="utf-8",
-        data=json.dumps({"realization": 0, "key": {"well_id": "W1"}, "value": 1.0})
+        data=json.dumps(
+            {
+                "realization": 0,
+                "key": {"response": "well", "well_id": "W1"},
+                "value": 1.0,
+            },
+        )
         + "\n",
     )
 
@@ -87,7 +105,13 @@ async def test_consolidate_upsert_logic(
     # 2. Second consolidation with updated value for same key
     Path(queue_file).write_text(
         encoding="utf-8",
-        data=json.dumps({"realization": 0, "key": {"well_id": "W1"}, "value": 2.0})
+        data=json.dumps(
+            {
+                "realization": 0,
+                "key": {"response": "well", "well_id": "W1"},
+                "value": 2.0,
+            },
+        )
         + "\n",
     )
 

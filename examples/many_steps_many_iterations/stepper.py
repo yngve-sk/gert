@@ -39,9 +39,9 @@ def main() -> None:
             x = float(args.realization)
 
         # Execute the "Math" (y = x + iteration + realization + step_index)
-        # Extract numeric index from step-1, step-2...
+        # Extract numeric index from step_0, step_1...
         try:
-            step_idx = int(args.step_name.split("-")[-1])
+            step_idx = int(args.step_name.split("_")[-1])
         except ValueError:
             step_idx = 0
 
@@ -49,7 +49,7 @@ def main() -> None:
 
         # 3. Ingest results via SDK
         client.post_response(
-            key={"response": f"R-{args.step_name}"},
+            key={"response": f"R_{args.step_name}"},
             value=computed_value,
         )
 

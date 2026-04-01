@@ -61,4 +61,20 @@ When a variable is a 3D matrix (e.g., a full reservoir grid):
 For the immediate Terminal implementation within `gert.monitor`:
 * **Library:** We use [`textual-plot`](https://pypi.org/project/textual-plot/) to power the terminal graphics. It supports braille-character drawing for high-resolution terminal line charts and scatter plots.
 * **Data Fetching:** The plotter must use the existing `StorageAPI` endpoints. Data should be pivoted using `polars` before being handed to `textual-plot`.
-* **Responsiveness:** Use a loading spinner for heavy ensemble loads to prevent blocking the UI.
+## 5. Live Data Streaming Architecture
+
+To maintain a strict backend/frontend separation while supporting real-time plot updates (without overwhelming the server network/RAM), GERT implements a **Manifest Polling (Cache-Busting)** architecture.
+
+### 1. Backend: Consolidation & Manifest
+* **Storage Layer**: As forward models emit data, the `IngestionReceiver` writes to fast, append-only `.jsonl` queues. Periodically (based on `consolidation_interval`), the `ConsolidationWorker` drains these queues and structurally updates the analytical `.parquet` files.
+* **Manifest Endpoint**: To avoid the frontend continuously downloading megabytes of Parquet data, the API exposes a lightweight endpoint: `GET /experiments/{exp_id}/executions/{exec_id}/ensembles/{it}/manifest`.
+* This endpoint returns the `last_modified` timestamps (or ETags) of the `parameters.parquet` and `responses/data.parquet` files. It requires virtually zero disk I/O or compute.
+
+### 2. Frontend: Smart Polling & Redrawing
+* **Polling**: When the `PlotterScreen` is active in the GUI/TUI, a background worker polls the `/manifest` endpoint at a high frequency (e.g., 1Hz).
+* **Fetching**: If the manifest timestamps differ from the frontend's local cache (indicating a consolidation event just occurred), the frontend issues a fetch to the full `/responses` and `/parameters` endpoints to download the newly consolidated data.
+* **Non-Destructive Redraw**: Upon receiving new data, the plotting canvas updates the underlying `polars` dataframes and selectively redraws the currently active plot. It must *not* reset the user's current zoom level, panning offsets, or active Z-axis slicing.
+
+### 3. Domain-Agnostic Variable Discovery
+* **Dynamic Response Parsing**: Because GERT is domain-agnostic, it cannot assume response schemas have a flat column named `"response"`. Response identifiers are arbitrary JSON keys (e.g., `{"well": "W1", "time": 10}`). The plotter must identify all columns that are part of the `key` grouping (everything except `value`, `std_dev`, `realization`, `source_step`, `type`) and dynamically group them to build the Selection Options in the left pane (e.g., creating an option for `Resp: well=W1` plotting `value` vs `time`).
+* **Dynamic Parameter Parsing**: Similarly, any column in the parameter matrix that is not a known spatial or structural index (`realization`, `i`, `j`, `k`) must be exposed as a plottable parameter.

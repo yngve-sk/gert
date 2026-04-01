@@ -73,7 +73,7 @@ def main() -> None:
 
             # 3. Ingest results via SDK
             client.post_response(
-                key={"well": w_name, "time": str(t)},
+                key={"response": "FOPR", "well": w_name, "time": str(t)},
                 value=val,
             )
 

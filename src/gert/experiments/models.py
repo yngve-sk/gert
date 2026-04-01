@@ -226,6 +226,21 @@ class Observation(BaseModel):
     std_dev: PositiveFloat
     coordinates: dict[str, float] | None = None
 
+    @model_validator(mode="after")
+    def validate_key_contains_response(self) -> Self:
+        """Ensure that the key dictionary always contains a 'response' identifier.
+
+        Raises:
+            ValueError: If the 'response' key is not present.
+        """
+        if "response" not in self.key:
+            msg = (
+                "The 'key' dictionary must contain a 'response' identifier "
+                "(e.g., {'response': 'FOPR', 'time': '10'})."
+            )
+            raise ValueError(msg)
+        return self
+
 
 class HookEvent(StrEnum):
     """Lifecycle points for external script execution."""
@@ -426,6 +441,21 @@ class ResponsePayload(BaseModel):
     source_step: str
     key: dict[str, str]
     value: float
+
+    @model_validator(mode="after")
+    def validate_key_contains_response(self) -> Self:
+        """Ensure that the key dictionary always contains a 'response' identifier.
+
+        Raises:
+            ValueError: If the 'response' key is not present.
+        """
+        if "response" not in self.key:
+            msg = (
+                "The 'key' dictionary must contain a 'response' identifier "
+                "(e.g., {'response': 'FOPR', 'time': '10'})."
+            )
+            raise ValueError(msg)
+        return self
 
 
 class InlineParameterIngestionPayload(BaseModel):
