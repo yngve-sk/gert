@@ -33,6 +33,7 @@ repos:
           - uvicorn
           - textual
           - rich
+          - textual-plot
         # Ensure mypy checks all files, not just changed ones
         pass_filenames: false
         args: ["--strict", "src/gert", "tests"]

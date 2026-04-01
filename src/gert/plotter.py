@@ -15,7 +15,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Label, LoadingIndicator, OptionList
 from textual.widgets.option_list import Option
-from textual_plot import HiResMode, PlotWidget  # type: ignore[import-not-found]
+from textual_plot import HiResMode, PlotWidget
 
 if TYPE_CHECKING:
     from gert.monitor import NodeData

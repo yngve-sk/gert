@@ -294,7 +294,7 @@ class TestEnIFSizingAndDesign:
         graph = nx.path_graph(n_nodes)
 
         # Build prior values (start all around 10.0)
-        prior_data = {"realization": np.arange(n_reals)}
+        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
         param_matrix = np.random.normal(loc=10.0, scale=1.0, size=(n_reals, n_nodes))
         prior_data["PORO"] = [list(row) for row in param_matrix]
         prior = pl.DataFrame(prior_data)
@@ -356,7 +356,7 @@ class TestEnIFSizingAndDesign:
         n_params = 5
 
         # Small realization count, massive observation count
-        prior_data = {"realization": np.arange(n_reals)}
+        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
         for p in range(n_params):
             prior_data[f"P{p}"] = np.random.normal(size=n_reals)
         prior = pl.DataFrame(prior_data)
@@ -476,7 +476,7 @@ class TestEnIFSnapshots:
         n_obs = 2
 
         # 1. Create fixed inputs deterministically
-        prior_data = {"realization": np.arange(n_reals)}
+        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
         for p in range(n_params):
             prior_data[f"PARAM_{p}"] = np.random.normal(
                 loc=10.0,
@@ -539,7 +539,7 @@ class TestEnIFSnapshots:
         n_obs = 100
 
         # 1. Create fixed inputs deterministically
-        prior_data = {"realization": np.arange(n_reals)}
+        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
         for p in range(n_params):
             prior_data[f"P{p}"] = np.random.normal(loc=0.0, scale=1.0, size=n_reals)
         prior = pl.DataFrame(prior_data)

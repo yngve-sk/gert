@@ -5,7 +5,7 @@ import time
 import traceback
 import urllib.request
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.error import URLError
 
@@ -83,10 +83,10 @@ class StateSummary(Static):
 
 # Icons for the TUI
 ICON_LOG = "󰈙" if False else "⬚"  # Fallback for standard terminals
-ICON_FM = "⚙"
-ICON_RES = "Σ"
-ICON_REAL = "●"
-ICON_ITER = "◆"
+ICON_FM = "🌍"
+ICON_RES = "🔥"
+ICON_REAL = "🧱"
+ICON_ITER = "🧱..🧱"
 
 # Status Prefixes
 PREFIX_PENDING = "○"
@@ -339,9 +339,12 @@ class GertMonitorApp(App[None]):
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                 if response.getcode() == 200:
                     meta = json.loads(response.read().decode("utf-8"))
-                    self.num_iterations = int(meta["num_iterations"])
-                    self.expected_count = int(meta["num_realizations"])
-                    self._num_fm_steps = int(meta["num_fm_steps"])
+                    self.experiment_name = meta.get("name", self.experiment_id)
+                    self.num_observations = int(meta.get("num_observations", 0))
+                    self.num_parameters = int(meta.get("num_parameters", 0))
+                    self.num_iterations = int(meta.get("num_iterations", 0))
+                    self.expected_count = int(meta.get("num_realizations", 0))
+                    self._num_fm_steps = int(meta.get("num_fm_steps", 0))
         except URLError:
             pass
 
@@ -607,7 +610,7 @@ class GertMonitorApp(App[None]):
 
             if it > 0 and it not in self._update_nodes:
                 self._update_nodes[it] = tree.root.add(
-                    f"ƒ Update (Iter {it - 1} → {it})",
+                    f"🧮✨ Update (Iter {it - 1} → {it})",
                     expand=False,
                     data=NodeData(node_type="update", iteration=it),
                 )
@@ -636,7 +639,7 @@ class GertMonitorApp(App[None]):
         if it not in self._iteration_nodes:
             if it > 0 and it not in self._update_nodes:
                 self._update_nodes[it] = tree.root.add(
-                    f"ƒ Update (Iter {it - 1} → {it})",
+                    f"🧮✨ Update (Iter {it - 1} → {it})",
                     expand=False,
                     data=NodeData(node_type="update", iteration=it),
                 )
@@ -825,7 +828,7 @@ class GertMonitorApp(App[None]):
             node = self._update_nodes[iteration]
             emoji = self._get_status_emoji(parsed_meta.status)
             node.set_label(
-                f"{emoji} ƒ Update (Iter {iteration - 1} → {iteration}) "
+                f"{emoji} 🧮✨ Update (Iter {iteration - 1} → {iteration}) "
                 f"- {parsed_meta.algorithm_name}",
             )
 
@@ -856,7 +859,7 @@ class GertMonitorApp(App[None]):
         item = self._selected_item
         viewer = self.query_one("#response-view", ResponseViewer)
         if item is None:
-            viewer.update_response("Select a realization or step to view details.")
+            self._show_experiment_details(viewer)
             return
 
         it = item.iteration
@@ -866,6 +869,10 @@ class GertMonitorApp(App[None]):
 
         if item.node_type == "update":
             self._show_update_details(viewer, it)
+            return
+
+        if item.node_type == "iteration":
+            self._show_iteration_details(viewer, it)
             return
 
         if r_id is None:
@@ -882,6 +889,156 @@ class GertMonitorApp(App[None]):
         elif item.node_type == "realization":
             self._show_realization_details(viewer, it, r_id)
 
+    def _parse_time(self, time_val: str | datetime) -> datetime:
+        if isinstance(time_val, datetime):
+            return time_val
+        return datetime.fromisoformat(time_val)
+
+    def _get_times_for_nodes(
+        self,
+        states: list[RealizationState],
+    ) -> tuple[datetime | None, datetime | None]:
+        start = None
+        end = None
+        for state in states:
+            for step in state.steps:
+                if step.start_time:
+                    try:
+                        dt = self._parse_time(step.start_time)
+                        if not start or dt < start:
+                            start = dt
+                    except ValueError:
+                        pass
+                if step.end_time:
+                    try:
+                        dt = self._parse_time(step.end_time)
+                        if not end or dt > end:
+                            end = dt
+                    except ValueError:
+                        pass
+        return start, end
+
+    def _show_experiment_details(self, viewer: ResponseViewer) -> None:
+        """Show the root dashboard for the experiment."""
+        start_time, end_time = self._get_times_for_nodes(list(self._statuses.values()))
+
+        elapsed = "N/A"
+        if start_time:
+            now = datetime.now(tz=UTC) if end_time is None else end_time
+            elapsed_td = now - start_time
+            elapsed = str(elapsed_td).split(".")[0]
+
+        total_expected = (self.expected_count or 0) * (self.num_iterations or 1)
+        overall_status = self._determine_overall_status(
+            list(self._statuses.values()),
+            total_expected,
+        )
+
+        emoji = self._get_status_emoji(overall_status)
+
+        current_iter = max([it for it, _ in self._statuses] + [0])
+        total_iters = self.num_iterations
+
+        exp_name = getattr(self, "experiment_name", self.experiment_id)
+        num_obs = getattr(self, "num_observations", 0)
+        num_params = getattr(self, "num_parameters", 0)
+
+        total_responses = sum(
+            len(resps)
+            for iter_resps in self._responses.values()
+            for resps in iter_resps.values()
+        )
+
+        start_str = start_time.strftime("%Y-%m-%d %H:%M:%S") if start_time else "N/A"
+        content = [
+            f"🧫 [bold blue]{exp_name}[/] (ID: [cyan]{self.execution_id}[/])",
+            f"State: {emoji} {overall_status} | 📅 {start_str} | 🕒 {elapsed}",
+            f"Progress: Iteration {current_iter} / {max(1, total_iters - 1)}",
+            "",
+            (
+                f"👥 Realizations: {self.expected_count} | 🔄 Iters: {total_iters} | "
+                f"{ICON_FM} Steps/Real: {self._num_fm_steps}"
+            ),
+            f"💧 Parameters: {num_params} | 🎯 Observations: {num_obs}",
+            f"🔥 Total Responses Received: {total_responses}",
+        ]
+        viewer.update_response("\n".join(content))
+
+    def _determine_overall_status(
+        self,
+        states: list[RealizationState],
+        expected_count: int,
+    ) -> str:
+        all_completed = True
+        any_failed = False
+        any_running = False
+
+        for state in states:
+            if state.status == "FAILED":
+                any_failed = True
+            elif state.status in {"RUNNING", "ACTIVE"}:
+                any_running = True
+            elif state.status not in {"COMPLETED", "FAILED"}:
+                all_completed = False
+
+        if any_failed:
+            return "FAILED"
+        if any_running:
+            return "RUNNING"
+        if all_completed and len(states) == expected_count:
+            return "COMPLETED"
+        return "PENDING"
+
+    def _show_iteration_details(self, viewer: ResponseViewer, iteration: int) -> None:
+        """Show summary statistics for a specific iteration."""
+        states = [s for (it, _), s in self._statuses.items() if it == iteration]
+        start_time, end_time = self._get_times_for_nodes(states)
+
+        elapsed = "N/A"
+        if start_time:
+            now = datetime.now(tz=UTC) if end_time is None else end_time
+            elapsed_td = now - start_time
+            elapsed = str(elapsed_td).split(".")[0]
+
+        done_steps = sum(
+            1
+            for state in states
+            for step in state.steps
+            if step.status in {"COMPLETED", "FAILED"}
+        )
+        total_planned_steps = (self.expected_count or 0) * self._num_fm_steps
+
+        overall_status = self._determine_overall_status(
+            states,
+            self.expected_count or 0,
+        )
+
+        emoji = self._get_status_emoji(overall_status)
+
+        responses = self._responses.get(iteration, {})
+        total_responses = sum(len(resps) for resps in responses.values())
+
+        content = [
+            f"{ICON_ITER} [bold]Iteration {iteration} Summary[/]",
+            f"State: {emoji} {overall_status} | 🕒 {elapsed}",
+            (
+                f"{ICON_FM} Steps: {done_steps} / {total_planned_steps} | "
+                f"🔥 Responses Received: {total_responses}"
+            ),
+        ]
+
+        obs_summary = self._observation_summaries.get(iteration)
+        if obs_summary:
+            n_misfit = obs_summary.average_normalized_misfit
+            a_resid = obs_summary.average_absolute_residual
+            content.append(
+                f"🎯 Avg Misfit: {n_misfit:.4f} | 📉 Avg Residual: {a_resid:.4f}",
+            )
+        else:
+            content.append("🎯 Avg Misfit: Calc... | 📉 Avg Residual: Calc...")
+
+        viewer.update_response("\n".join(content))
+
     def _show_update_details(self, viewer: ResponseViewer, iteration: int) -> None:
         """Show mathematical update metadata."""
         meta = self._update_metadata_cache.get(iteration)
@@ -891,7 +1048,7 @@ class GertMonitorApp(App[None]):
 
         emoji = self._get_status_emoji(meta.status)
         content = [
-            f"ƒ [bold]Mathematical Update (Iter {iteration - 1} → {iteration})[/]",
+            f"🧮✨ [bold]Mathematical Update (Iter {iteration - 1} → {iteration})[/]",
             f"Algorithm: [bold blue]{meta.algorithm_name}[/]",
             f"Status: {emoji} {meta.status}",
         ]
