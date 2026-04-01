@@ -1,10 +1,19 @@
 """Query API for GERT storage."""
 
+import json
+import typing
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
-from gert.experiments.models import ExecutionState, ExperimentConfig
+from gert.experiments.models import (
+    ExecutionState,
+    ExperimentConfig,
+    ObservationDetail,
+    ObservationSummary,
+    UpdateMetadata,
+)
 from gert.storage.consolidation import ConsolidationWorker
 
 
@@ -30,6 +39,214 @@ class StorageAPI:
         if ensemble_path.exists():
             await worker.consolidate()
         return True
+
+    def get_update_metadata(
+        self,
+        experiment_id: str,
+        execution_id: str,
+        iteration: int,
+    ) -> UpdateMetadata:
+        """Retrieve the metadata for a specific update step.
+
+        Raises:
+            FileNotFoundError: If the update metadata file does not exist.
+        """
+        meta_file = (
+            self._base_storage_path
+            / experiment_id
+            / execution_id
+            / f"iter-{iteration}"
+            / "update_metadata.json"
+        )
+        if not meta_file.exists():
+            msg = f"Update metadata for iteration {iteration} not found."
+            raise FileNotFoundError(msg)
+        return UpdateMetadata.model_validate_json(meta_file.read_text(encoding="utf-8"))
+
+    def write_update_metadata(
+        self,
+        experiment_id: str,
+        execution_id: str,
+        iteration: int,
+        metadata: UpdateMetadata,
+    ) -> None:
+        """Write metadata for an update step to the posterior iteration's directory."""
+        iter_dir = (
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
+        )
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        meta_file = iter_dir / "update_metadata.json"
+        meta_file.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
+
+    def get_observation_summary(  # noqa: C901
+        self,
+        experiment_id: str,
+        execution_id: str,
+        iteration: int,
+    ) -> ObservationSummary | None:
+        """Calculate and return observation summary statistics.
+
+        Caches the result if the iteration is completed.
+        """
+        iter_dir = (
+            self._base_storage_path / experiment_id / execution_id / f"iter-{iteration}"
+        )
+        summary_file = iter_dir / "observation_summary.json"
+
+        if summary_file.exists():
+            try:
+                return ObservationSummary.model_validate_json(
+                    summary_file.read_text(encoding="utf-8"),
+                )
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        try:
+            config_file = self._base_storage_path / experiment_id / "config.json"
+            if not config_file.exists():
+                return None
+
+            config = ExperimentConfig.model_validate_json(
+                config_file.read_text(encoding="utf-8"),
+            )
+
+            data = []
+            for obs in config.observations:
+                row: dict[str, Any] = dict(obs.key)
+                row["value_obs"] = obs.value
+                row["std_dev"] = obs.std_dev
+                if obs.coordinates:
+                    row.update(obs.coordinates)
+                data.append(row)
+            obs_df = pl.DataFrame(data)
+
+            try:
+                sim_resp_df = self.get_responses(experiment_id, execution_id, iteration)
+            except FileNotFoundError:
+                return None
+
+            if len(sim_resp_df) == 0:
+                return None
+
+            common_cols = [
+                c
+                for c in obs_df.columns
+                if c in sim_resp_df.columns
+                and c not in {"value", "value_obs", "std_dev"}
+            ]
+            if not common_cols:
+                return None
+
+            joined = sim_resp_df.join(obs_df, on=common_cols, how="inner")
+            if len(joined) == 0:
+                return None
+
+            # Residuals and misfits
+            # residual: The raw error (simulation - observation).
+            # absolute_misfit: The absolute error in terms of std deviations.
+            residual = joined["value"] - joined["value_obs"]
+            normal_misfit = residual / joined["std_dev"]
+
+            # Scale into [-1, 1] range while preserving 0 as a perfect match.
+            # We do this by dividing by the maximum absolute error in the ensemble.
+            max_abs_misfit = normal_misfit.abs().max()
+            scaling_factor = max_abs_misfit if max_abs_misfit != 0.0 else 1.0
+
+            normalized_misfit = normal_misfit / scaling_factor
+
+            joined = joined.with_columns(
+                residual.alias("residual"),
+                residual.abs().alias("absolute_residual"),
+                normal_misfit.alias("normal_misfit"),
+                normal_misfit.abs().alias("absolute_misfit"),
+                normalized_misfit.alias("normalized_misfit"),
+            )
+
+            # Aggregate totals across all observations
+            mean_norm_misfit = joined["normalized_misfit"].mean()
+            mean_abs_res = joined["absolute_residual"].mean()
+            mean_abs_misfit = joined["absolute_misfit"].mean()
+
+            avg_norm_misfit = (
+                float(typing.cast("float", mean_norm_misfit))
+                if isinstance(mean_norm_misfit, (int, float))
+                else 0.0
+            )
+            avg_abs_res = (
+                float(typing.cast("float", mean_abs_res))
+                if isinstance(mean_abs_res, (int, float))
+                else 0.0
+            )
+            avg_abs_misfit = (
+                float(typing.cast("float", mean_abs_misfit))
+                if isinstance(mean_abs_misfit, (int, float))
+                else 0.0
+            )
+
+            # Details exposes various misfit metrics per observation, averaged
+            details_df = joined.group_by(common_cols).agg(
+                pl.col("absolute_residual").mean(),
+                pl.col("normalized_misfit").mean(),
+                pl.col("absolute_misfit").mean(),
+            )
+
+            # Convert to list of dicts with native Python types
+            details = []
+            for row in details_df.to_dicts():
+                abs_res = float(row.get("absolute_residual", 0.0))
+                norm_misfit = float(row.get("normalized_misfit", 0.0))
+                abs_misfit = float(row.get("absolute_misfit", 0.0))
+
+                key_dict = {
+                    str(k): str(v)
+                    for k, v in row.items()
+                    if k
+                    not in {"absolute_residual", "normalized_misfit", "absolute_misfit"}
+                }
+                response_val = key_dict.pop("response", None)
+
+                details.append(
+                    ObservationDetail(
+                        response=response_val,
+                        key=key_dict,
+                        absolute_residual=abs_res,
+                        normalized_misfit=norm_misfit,
+                        absolute_misfit=abs_misfit,
+                    ),
+                )
+
+            result = ObservationSummary(
+                average_normalized_misfit=avg_norm_misfit,
+                average_absolute_residual=avg_abs_res,
+                average_absolute_misfit=avg_abs_misfit,
+                details=details,
+            )
+
+            state_file = (
+                self._base_storage_path
+                / experiment_id
+                / execution_id
+                / "execution_state.json"
+            )
+            if state_file.exists():
+                state = ExecutionState.model_validate_json(
+                    state_file.read_text(encoding="utf-8"),
+                )
+                if state.current_iteration > iteration or state.status in {
+                    "COMPLETED",
+                    "FAILED",
+                    "CANCELED",
+                }:
+                    iter_dir.mkdir(parents=True, exist_ok=True)
+                    summary_file.write_text(
+                        result.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+
+        except Exception:  # noqa: BLE001
+            return None
+        else:
+            return result
 
     def get_responses(
         self,

@@ -2,6 +2,7 @@
 
 import json
 import time
+import traceback
 import urllib.request
 from collections import defaultdict
 from datetime import datetime
@@ -14,6 +15,8 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Footer, Header, Label, ProgressBar, Static, Tree
 from textual.widgets.tree import TreeNode
+
+from gert.experiments.models import ObservationSummary, UpdateMetadata
 
 
 class StepState(BaseModel):
@@ -53,6 +56,7 @@ class IterationCount(BaseModel):
     total_steps: int = 0
     done_steps: int = 0
     total_responses: int = 0
+    observation_summary: ObservationSummary | None = None
 
 
 class ResponseViewer(Static):
@@ -90,7 +94,14 @@ PREFIX_DONE = "[green]✓[/]"
 PREFIX_FAIL = "[red]✗[/]"
 
 
-type NodeData = tuple[int, int, str | None, str | None]
+class NodeData(BaseModel):
+    """Data attached to each tree node for navigation details."""
+
+    node_type: str  # "iteration", "update", "realization", "step", "log"
+    iteration: int
+    realization_id: int | None = None
+    step_name: str | None = None
+    log_type: str | None = None
 
 
 class ProgressView(ScrollableContainer):
@@ -133,6 +144,9 @@ class GertMonitorApp(App[None]):
     _statuses: dict[tuple[int, int], RealizationState]
     _responses: dict[int, dict[int, list[ResponseItem]]]
     _iteration_nodes: dict[int, TreeNode[NodeData | None]]
+    _update_nodes: dict[int, TreeNode[NodeData | None]]
+    _update_metadata_cache: dict[int, UpdateMetadata]
+    _observation_summaries: dict[int, ObservationSummary]
     _realization_nodes: dict[tuple[int, int], TreeNode[NodeData | None]]
     _step_nodes: dict[tuple[int, int, str], TreeNode[NodeData | None]]
     _iteration_bar_widgets: dict[int, tuple[ProgressBar, Label]]
@@ -172,7 +186,7 @@ class GertMonitorApp(App[None]):
     }
 
     .iteration-counter {
-        width: 32;
+        width: 52;
         padding-left: 1;
         content-align: left middle;
     }
@@ -247,6 +261,9 @@ class GertMonitorApp(App[None]):
         self._statuses = {}
         self._responses = {}
         self._iteration_nodes = {}
+        self._update_nodes = {}
+        self._update_metadata_cache = {}
+        self._observation_summaries = {}
         self._realization_nodes = {}
         self._step_nodes = {}
         self._iteration_bar_widgets = {}
@@ -269,7 +286,7 @@ class GertMonitorApp(App[None]):
                     Label("Ensemble", classes="iteration-label"),
                     Label("Progress Bar", classes="header-label-centered"),
                     Label(
-                        f"{ICON_FM} Steps | {ICON_RES} Resps",
+                        f"{ICON_FM} Steps | {ICON_RES} Resps | avg norm misfit",
                         classes="iteration-counter",
                     ),
                     classes="header-row",
@@ -306,9 +323,9 @@ class GertMonitorApp(App[None]):
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                 if response.getcode() == 200:
                     meta = json.loads(response.read().decode("utf-8"))
-                    self.num_iterations = meta["num_iterations"]
-                    self.expected_count = meta["num_realizations"]
-                    self._num_fm_steps = meta["num_fm_steps"]
+                    self.num_iterations = int(meta["num_iterations"])
+                    self.expected_count = int(meta["num_realizations"])
+                    self._num_fm_steps = int(meta["num_fm_steps"])
         except URLError:
             pass
 
@@ -396,9 +413,16 @@ class GertMonitorApp(App[None]):
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                 if response.getcode() == 200:
                     data = json.loads(response.read().decode("utf-8"))
-                    self.call_from_thread(self.process_data, data)
+                    parsed_data = [
+                        RealizationState.model_validate(item) for item in data
+                    ]
+                    self.call_from_thread(self.process_data, parsed_data)
 
-                    if self.expected_count is not None:
+                    if (
+                        self.expected_count is not None
+                        and self.expected_count > 0
+                        and self.num_iterations > 0
+                    ):
                         total_expected = self.expected_count * self.num_iterations
                         if len(self._statuses) >= total_expected and all(
                             s.status in {"COMPLETED", "FAILED"}
@@ -423,9 +447,54 @@ class GertMonitorApp(App[None]):
                 with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                     if response.getcode() == 200:
                         data = json.loads(response.read().decode("utf-8"))
-                        self.call_from_thread(self.process_responses, it, data)
+                        parsed_data = [
+                            ResponseItem.model_validate(item) for item in data
+                        ]
+                        self.call_from_thread(self.process_responses, it, parsed_data)
             except URLError:
                 pass
+
+            # Poll for observation summary
+            summary_url = (
+                f"{self.api_url}/experiments/{self.experiment_id}"
+                f"/executions/{self.execution_id}/ensembles/{it}/observation_summary"
+            )
+            try:
+                summary_req = urllib.request.Request(summary_url)  # noqa: S310
+                with urllib.request.urlopen(summary_req, timeout=5) as summary_resp:  # noqa: S310
+                    if summary_resp.getcode() == 200:
+                        summary_data = json.loads(summary_resp.read().decode("utf-8"))
+                        if summary_data is not None:
+                            parsed_summary = ObservationSummary.model_validate(
+                                summary_data,
+                            )
+                            self.call_from_thread(
+                                self.process_observation_summary,
+                                it,
+                                parsed_summary,
+                            )
+            except URLError:
+                pass
+
+            # Poll for update metadata if iteration > 0
+            if it > 0:
+                meta_url = (
+                    f"{self.api_url}/experiments/{self.experiment_id}"
+                    f"/executions/{self.execution_id}/ensembles/{it}/update/metadata"
+                )
+                try:
+                    meta_req = urllib.request.Request(meta_url)  # noqa: S310
+                    with urllib.request.urlopen(meta_req, timeout=5) as meta_resp:  # noqa: S310
+                        if meta_resp.getcode() == 200:
+                            meta_data = json.loads(meta_resp.read().decode("utf-8"))
+                            parsed_meta = UpdateMetadata.model_validate(meta_data)
+                            self.call_from_thread(
+                                self.process_update_metadata,
+                                it,
+                                parsed_meta,
+                            )
+                except URLError:
+                    pass
 
     @work(exclusive=True, thread=True)
     def poll_api(self) -> None:
@@ -442,9 +511,8 @@ class GertMonitorApp(App[None]):
 
             time.sleep(0.5)
 
-    def process_data(self, data: list[dict[str, Any]]) -> None:
+    def process_data(self, parsed_data: list[RealizationState]) -> None:
         """Process API data and update UI components on the main thread."""
-        parsed_data = [RealizationState.model_validate(item) for item in data]
         state_counts: dict[str, int] = defaultdict(int)
 
         # Precompute num_fm_steps from data if _fetch_config hasn't finished
@@ -507,6 +575,7 @@ class GertMonitorApp(App[None]):
                 total_steps=planned_r * self._num_fm_steps,
                 done_steps=0,
                 total_responses=0,
+                observation_summary=self._observation_summaries.get(i),
             )
         return iter_counts
 
@@ -520,11 +589,22 @@ class GertMonitorApp(App[None]):
             is_it_done = counts.done == counts.total and counts.total > 0
             it_prefix = PREFIX_DONE if is_it_done else ICON_ITER
 
+            if it > 0 and it not in self._update_nodes:
+                self._update_nodes[it] = tree.root.add(
+                    f"ƒ Update (Iter {it - 1} → {it})",
+                    expand=False,
+                    data=NodeData(node_type="update", iteration=it),
+                )
+
             # Simple label without progress bar: "✓ Iteration 0 (10/10)"
             label = f"{it_prefix} Iteration {it} ({counts.done}/{counts.total})"
 
             if it not in self._iteration_nodes:
-                self._iteration_nodes[it] = tree.root.add(label, expand=True)
+                self._iteration_nodes[it] = tree.root.add(
+                    label,
+                    expand=True,
+                    data=NodeData(node_type="iteration", iteration=it),
+                )
             else:
                 self._iteration_nodes[it].set_label(label)
 
@@ -538,10 +618,17 @@ class GertMonitorApp(App[None]):
     ) -> None:
         """Update a single realization node and its steps."""
         if it not in self._iteration_nodes:
+            if it > 0 and it not in self._update_nodes:
+                self._update_nodes[it] = tree.root.add(
+                    f"ƒ Update (Iter {it - 1} → {it})",
+                    expand=False,
+                    data=NodeData(node_type="update", iteration=it),
+                )
             # Temporary label, will be overwritten in the second pass of process_data
             self._iteration_nodes[it] = tree.root.add(
                 f"{ICON_ITER} Iteration {it}",
                 expand=True,
+                data=NodeData(node_type="iteration", iteration=it),
             )
 
         iter_node = self._iteration_nodes[it]
@@ -563,7 +650,11 @@ class GertMonitorApp(App[None]):
         if (it, r_id) not in self._realization_nodes:
             self._realization_nodes[it, r_id] = iter_node.add(
                 label,
-                data=(it, r_id, None, None),
+                data=NodeData(
+                    node_type="realization",
+                    iteration=it,
+                    realization_id=r_id,
+                ),
                 expand=False,
             )
         else:
@@ -588,18 +679,35 @@ class GertMonitorApp(App[None]):
         if (it, r_id, step_name) not in self._step_nodes:
             step_node = real_node.add(
                 step_label,
-                data=(it, r_id, step_name, None),
+                data=NodeData(
+                    node_type="step",
+                    iteration=it,
+                    realization_id=r_id,
+                    step_name=step_name,
+                ),
                 expand=False,
             )
             self._step_nodes[it, r_id, step_name] = step_node
             # Add log nodes
             step_node.add_leaf(
                 f"{ICON_LOG} STDOUT",
-                data=(it, r_id, step_name, "stdout"),
+                data=NodeData(
+                    node_type="log",
+                    iteration=it,
+                    realization_id=r_id,
+                    step_name=step_name,
+                    log_type="stdout",
+                ),
             )
             step_node.add_leaf(
                 f"{ICON_LOG} STDERR",
-                data=(it, r_id, step_name, "stderr"),
+                data=NodeData(
+                    node_type="log",
+                    iteration=it,
+                    realization_id=r_id,
+                    step_name=step_name,
+                    log_type="stderr",
+                ),
             )
         else:
             self._step_nodes[it, r_id, step_name].set_label(step_label)
@@ -637,7 +745,16 @@ class GertMonitorApp(App[None]):
             step_info = f"{ICON_FM} {done_s}/{total_s}"
 
             resp_info = f"{ICON_RES} {str(counts.total_responses).rjust(4)}"
-            counter_text = f"{step_info} | {resp_info}"
+
+            misfit_val = (
+                counts.observation_summary.average_normalized_misfit
+                if counts.observation_summary
+                else None
+            )
+            misfit_str = f"{misfit_val:.3f}" if misfit_val is not None else "N/A"
+            misfit_info = f"Δ {misfit_str.rjust(6)}"
+
+            counter_text = f"{step_info} | {resp_info} | {misfit_info}"
             if it not in self._iteration_bar_widgets:
                 pb = ProgressBar(total=max(1, counts.total), show_eta=False)
                 cnt = Label(counter_text, classes="iteration-counter")
@@ -657,15 +774,44 @@ class GertMonitorApp(App[None]):
                 pb.progress = counts.done
                 cnt.update(counter_text)
 
-    def process_responses(self, iteration: int, data: list[dict[str, Any]]) -> None:
+    def process_responses(
+        self,
+        iteration: int,
+        parsed_data: list[ResponseItem],
+    ) -> None:
         """Process response data and update the cached responses on the main thread."""
-        parsed_data = [ResponseItem.model_validate(item) for item in data]
         iteration_responses: dict[int, list[ResponseItem]] = defaultdict(list)
         for item in parsed_data:
             if item.realization is not None:
                 iteration_responses[item.realization].append(item)
 
         self._responses[iteration] = dict(iteration_responses)
+
+    def process_observation_summary(
+        self,
+        iteration: int,
+        parsed_summary: ObservationSummary,
+    ) -> None:
+        """Process observation summary data."""
+        if not parsed_summary:
+            return
+        self._observation_summaries[iteration] = parsed_summary
+
+    def process_update_metadata(
+        self,
+        iteration: int,
+        parsed_meta: UpdateMetadata,
+    ) -> None:
+        """Process mathematical update metadata."""
+        self._update_metadata_cache[iteration] = parsed_meta
+
+        if iteration in self._update_nodes:
+            node = self._update_nodes[iteration]
+            emoji = self._get_status_emoji(parsed_meta.status)
+            node.set_label(
+                f"{emoji} ƒ Update (Iter {iteration - 1} → {iteration}) "
+                f"- {parsed_meta.algorithm_name}",
+            )
 
     def on_tree_node_highlighted(
         self,
@@ -697,17 +843,64 @@ class GertMonitorApp(App[None]):
             viewer.update_response("Select a realization or step to view details.")
             return
 
-        it, r_id, step_name, log_type = item
+        it = item.iteration
+        r_id = item.realization_id
+        step_name = item.step_name
+        log_type = item.log_type
+
+        if item.node_type == "update":
+            self._show_update_details(viewer, it)
+            return
+
+        if r_id is None:
+            return
+
         state = self._statuses.get((it, r_id))
         if not state:
             return
 
-        if log_type:
+        if item.node_type == "log" and log_type:
             self._show_log_details(viewer, it, r_id, step_name or "unknown", log_type)
-        elif step_name:
+        elif item.node_type == "step" and step_name:
             self._show_step_details(viewer, it, r_id, step_name, state)
-        else:
+        elif item.node_type == "realization":
             self._show_realization_details(viewer, it, r_id)
+
+    def _show_update_details(self, viewer: ResponseViewer, iteration: int) -> None:
+        """Show mathematical update metadata."""
+        meta = self._update_metadata_cache.get(iteration)
+        if not meta:
+            viewer.update_response("Update metadata not yet available.")
+            return
+
+        emoji = self._get_status_emoji(meta.status)
+        content = [
+            f"ƒ [bold]Mathematical Update (Iter {iteration - 1} → {iteration})[/]",
+            f"Algorithm: [bold blue]{meta.algorithm_name}[/]",
+            f"Status: {emoji} {meta.status}",
+        ]
+
+        start = self._format_time(meta.start_time)
+        end = self._format_time(meta.end_time)
+        content.append(f"🕒 {start} -> {end}")
+        if meta.duration_seconds:
+            content.append(f"Duration: {meta.duration_seconds:.2f}s")
+        if meta.error:
+            content.append(f"\n[red]Error: {meta.error}[/]")
+
+        if meta.configuration:
+            content.extend(["", "[bold underline]Configuration:[/]", ""])
+            content.extend(json.dumps(meta.configuration, indent=2).split("\n"))
+
+        if meta.metrics:
+            content.extend(["", "[bold underline]Metrics:[/]", ""])
+            for k, v in meta.metrics.items():
+                if isinstance(v, float):
+                    content.append(f"  [cyan]{k}[/]: {v:.6f}")
+                else:
+                    content.append(f"  [cyan]{k}[/]: {v}")
+
+        viewer.update_response("\n".join(content))
 
     def _show_log_details(
         self,
@@ -847,4 +1040,8 @@ def start_monitor(
         experiment_id,
         execution_id,
     )
-    app.run()
+    try:
+        app.run()
+    except Exception:
+        traceback.print_exc()
+        raise
