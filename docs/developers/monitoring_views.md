@@ -118,3 +118,13 @@ While the data requirements are identical, the presentation formats differ based
     *   🧮✨ for Mathematical Updates.
 *   **Live Updates**: Views must handle asynchronous updates gracefully. If an iteration is currently running, misfit statistics won't exist yet; the UI should display "N/A", "Calculating...", or hide the field rather than throwing an error.
 *   **Navigation**: The CLI uses a Tree widget on the left. A Web GUI might use a similar sidebar, breadcrumbs, or drill-down cards.
+
+## 4. Connecting to Existing Experiments (`gert connect`)
+
+GERT allows users to attach the monitoring TUI to an experiment that is already running, suspended, or completed without restarting it. This ensures that the rich visualization and inspection capabilities of the monitor are decoupled from the lifecycle of the experiment submission.
+
+*   **Command:** `gert connect <experiment_id> <execution_id> [OPTIONS]`
+*   **Behavior:** The `gert connect` command instantly opens the same Terminal User Interface (TUI) as `gert run --monitor`.
+*   **Server Lifecycle:** The TUI relies entirely on the GERT server's REST API for all data. If a GERT server is not currently running at the specified `--api-url`, the `gert connect` command **must temporarily spawn a standard background server**. This is exactly the same generic experiment server started by `gert server` or `gert run`; there is no "read-only" or special-cased server instance. It relies on the server's existing functionality to load state from the local permanent storage. It should never circumvent the API to read parquet/json files directly from disk.
+*   **Offline/Completed Experiments:** If the specified experiment and execution have already completed (or failed), the monitor will still load perfectly via the API. It retrieves the static terminal state, parses the final `parameters.parquet` and `responses.parquet` datasets, and allows the user to browse logs, plot data, and inspect the final outcome exactly as if it had just finished running.
+*   **Persistence:** The TUI opened by `gert connect` remains open until explicitly closed by the user (via `q` or `ctrl+c`), regardless of whether the underlying experiment finishes its execution while the monitor is attached.
