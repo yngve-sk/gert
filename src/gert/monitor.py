@@ -18,7 +18,7 @@ from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.widgets import Footer, Header, Label, ProgressBar, Static, Tree
 from textual.widgets.tree import TreeNode
 
-from gert.experiments.models import ObservationSummary, UpdateMetadata
+from gert.experiments.models import ExperimentConfig, ObservationSummary, UpdateMetadata
 from gert.plotter import PlotterScreen
 
 
@@ -329,24 +329,25 @@ class GertMonitorApp(App[None]):
         tree.root.expand()
 
         self.set_interval(1.0, self._update_response_viewer)
-        self._fetch_metadata()
+        self._fetch_config()
         self.poll_api()
 
     @work(exclusive=True, thread=True)
-    def _fetch_metadata(self) -> None:
-        """Fetch the experiment metadata to know the planned bounds."""
-        url = f"{self.api_url}/experiments/{self.experiment_id}/metadata"
+    def _fetch_config(self) -> None:
+        """Fetch the experiment config to know the planned bounds."""
+        url = f"{self.api_url}/experiments/{self.experiment_id}/config"
         try:
             req = urllib.request.Request(url)  # noqa: S310
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                 if response.getcode() == 200:
-                    meta = json.loads(response.read().decode("utf-8"))
-                    self.experiment_name = meta.get("name", self.experiment_id)
-                    self.num_observations = int(meta.get("num_observations", 0))
-                    self.num_parameters = int(meta.get("num_parameters", 0))
-                    self.num_iterations = int(meta.get("num_iterations", 0))
-                    self.expected_count = int(meta.get("num_realizations", 0))
-                    self._num_fm_steps = int(meta.get("num_fm_steps", 0))
+                    config_json = response.read().decode("utf-8")
+                    config = ExperimentConfig.model_validate_json(config_json)
+                    self.experiment_name = config.name
+                    self.num_observations = config.num_observations
+                    self.num_parameters = config.num_parameters
+                    self.num_iterations = config.num_iterations
+                    self.expected_count = config.num_realizations
+                    self._num_fm_steps = config.num_fm_steps
         except URLError:
             pass
 
