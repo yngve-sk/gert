@@ -61,19 +61,6 @@ class StepLogResponse(BaseModel):
     stderr: str
 
 
-class ExperimentMetadata(BaseModel):
-    """Bounds and metadata for an experiment."""
-
-    experiment_id: str
-    name: str
-    num_iterations: int
-    num_realizations: int
-    num_fm_steps: int
-    step_names: list[str]
-    num_observations: int = 0
-    num_parameters: int = 0
-
-
 class ExperimentResponse(BaseModel):
     """Response model for a newly created experiment."""
 
@@ -366,48 +353,6 @@ async def get_experiment_config(
             detail=f"Experiment '{experiment_id}' not found",
         )
     return _experiment_configs[experiment_id]
-
-
-@router.get(
-    "/experiments/{experiment_id}/metadata",
-    summary="Retrieve experiment metadata",
-    description="Returns bounds and metadata (num steps, realizations, etc) "
-    "for an experiment.",
-)
-async def get_experiment_metadata(
-    experiment_id: str,
-) -> ExperimentMetadata:
-    """Retrieve experiment metadata by ID.
-
-    Raises:
-        HTTPException: If the experiment is not found.
-    """
-    if experiment_id not in _experiment_configs:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Experiment '{experiment_id}' not found",
-        )
-    config = _experiment_configs[experiment_id]
-
-    num_realizations = len(
-        config.parameter_matrix.get_realizations(config.base_working_directory),
-    )
-    num_fm_steps = len(config.forward_model_steps)
-    step_names = [s.name for s in config.forward_model_steps]
-    num_iterations = len(config.updates) + 1  # Prior + N updates
-    num_observations = len(config.observations)
-    num_parameters = len(config.parameter_matrix.metadata)
-
-    return ExperimentMetadata(
-        experiment_id=experiment_id,
-        name=config.name,
-        num_iterations=num_iterations,
-        num_realizations=num_realizations,
-        num_fm_steps=num_fm_steps,
-        step_names=step_names,
-        num_observations=num_observations,
-        num_parameters=num_parameters,
-    )
 
 
 @router.post(

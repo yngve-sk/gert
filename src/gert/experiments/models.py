@@ -420,6 +420,36 @@ class ExperimentConfig(BaseModel):
             ).resolve()
         return self
 
+    @property
+    def num_iterations(self) -> int:
+        """Return the total number of iterations (Prior + N updates)."""
+        return len(self.updates) + 1
+
+    @property
+    def num_realizations(self) -> int:
+        """Return the total number of realizations in the ensemble."""
+        return len(self.parameter_matrix.get_realizations(self.base_working_directory))
+
+    @property
+    def num_fm_steps(self) -> int:
+        """Return the number of forward model steps."""
+        return len(self.forward_model_steps)
+
+    @property
+    def step_names(self) -> list[str]:
+        """Return the names of the forward model steps."""
+        return [s.name for s in self.forward_model_steps]
+
+    @property
+    def num_observations(self) -> int:
+        """Return the total number of observations."""
+        return len(self.observations)
+
+    @property
+    def num_parameters(self) -> int:
+        """Return the total number of parameters."""
+        return len(self.parameter_matrix.metadata)
+
 
 class ExecutionState(BaseModel):
     """Overall state of an experiment execution."""

@@ -29,6 +29,8 @@ When a specific node in the hierarchical execution tree is selected, the detail 
 ### 2.1 Experiment (Root) Summary
 Displayed when the root node of the experiment is selected. It acts as the primary dashboard for the run.
 
+*Note: To build this dashboard, client applications should fetch the full `/experiments/{experiment_id}/config` endpoint. In Python contexts, the `ExperimentConfig` Pydantic model provides pure function getters (e.g., `.num_iterations`, `.num_observations`, `.num_parameters`) to efficiently compute these structural bounds dynamically without requiring a dedicated metadata endpoint.*
+
 **Identification & Scope**
 *   **Name**: `ExperimentConfig.name`
 *   **Execution ID**: `ExecutionState.execution_id`
