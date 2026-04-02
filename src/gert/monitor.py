@@ -1,5 +1,6 @@
 """CLI Monitor for GERT experiments using Textual."""
 
+import io
 import json
 import time
 import traceback
@@ -9,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.error import URLError
 
+import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 from textual import work
 from textual.app import App, ComposeResult
@@ -452,26 +454,34 @@ class GertMonitorApp(App[None]):
             pass
         return False
 
+    def _poll_iteration_responses(self, it: int) -> None:
+        url = (
+            f"{self.api_url}/experiments/{self.experiment_id}"
+            f"/executions/{self.execution_id}/ensembles/{it}/responses"
+        )
+        try:
+            req = urllib.request.Request(url)  # noqa: S310
+            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
+                if response.getcode() == 200:
+                    data_bytes = response.read()
+                    if data_bytes:
+                        df = pl.read_parquet(io.BytesIO(data_bytes))
+                        data = df.to_dicts()
+                        parsed_data = [
+                            ResponseItem.model_validate(item) for item in data
+                        ]
+                        self.call_from_thread(self.process_responses, it, parsed_data)
+        except URLError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            self.log.warning(f"Failed to poll responses: {e}")
+
     def _poll_responses(self) -> None:
         """Poll the responses API for all discovered iterations."""
         # Poll for each iteration we know about.
         iterations = {it for it, _ in self._statuses}
         for it in sorted(iterations):
-            url = (
-                f"{self.api_url}/experiments/{self.experiment_id}"
-                f"/executions/{self.execution_id}/ensembles/{it}/responses"
-            )
-            try:
-                req = urllib.request.Request(url)  # noqa: S310
-                with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
-                    if response.getcode() == 200:
-                        data = json.loads(response.read().decode("utf-8"))
-                        parsed_data = [
-                            ResponseItem.model_validate(item) for item in data
-                        ]
-                        self.call_from_thread(self.process_responses, it, parsed_data)
-            except URLError:
-                pass
+            self._poll_iteration_responses(it)
 
             # Poll for observation summary
             summary_url = (
