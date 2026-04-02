@@ -60,7 +60,7 @@ When a variable is a 3D matrix (e.g., a full reservoir grid):
 
 For the immediate Terminal implementation within `gert.monitor`:
 * **Library:** We use [`textual-plot`](https://pypi.org/project/textual-plot/) to power the terminal graphics. It supports braille-character drawing for high-resolution terminal line charts and scatter plots.
-* **Data Fetching:** The plotter must use the existing `StorageAPI` endpoints. Data should be pivoted using `polars` before being handed to `textual-plot`.
+* **Data Fetching:** The plotter must use the existing `StorageAPI` endpoints. To optimize data transfer, the `/responses` and `/parameters` API endpoints stream large tabular datasets directly as binary **Apache Parquet** (`application/vnd.apache.parquet`). The client uses `polars` to read these streams directly into DataFrames before pivoting and handing them to `textual-plot`.
 ## 5. Live Data Streaming Architecture
 
 To maintain a strict backend/frontend separation while supporting real-time plot updates (without overwhelming the server network/RAM), GERT implements a **Manifest Polling (Cache-Busting)** architecture.
