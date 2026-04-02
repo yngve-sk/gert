@@ -82,11 +82,11 @@ All monitoring data adheres to GERT's immutable configuration pattern. The execu
 When an experiment is started with the `--monitor` flag, the CLI automatically launches the `textual` application immediately after submitting the experiment to the backend. The monitor will track the live execution until completion, and remain open afterward.
 
 ### 2. `gert connect`
-To attach the TUI monitor to an existing experiment (whether it is `PENDING`, `RUNNING`, `PAUSED`, `COMPLETED`, or `FAILED`), use the connect command:
+To attach the TUI monitor to existing or historical runs of an experiment, use the connect command with the experiment's configuration file:
 ```bash
-gert connect <experiment_id> <execution_id> [--api-url http://...]
+gert connect path/to/experiment.json [--api-url http://localhost:8000]
 ```
-The application behaves identically to the `run --monitor` command. If the GERT API server is not available at `--api-url`, the `connect` command will launch a temporary, background instance of the standard GERT server to expose the API. There is no special-case "offline viewer"; the monitor always talks to a real, generic GERT server, ensuring the TUI never directly reads local files or circumvents the backend.
+The CLI parses the configuration to determine the permanent storage location, then launches a temporary, background instance of the standard GERT server (if one isn't already available at `--api-url`). The TUI initially presents an **Execution Browser** listing all historical and active executions (runs) of this configuration. The user selects an execution to drill down into the standard monitoring layout. There is no special-case "offline viewer"; the monitor always talks to a real, generic GERT server.
 
 ## Implementation Status
 - [ ] Backend monitoring APIs
