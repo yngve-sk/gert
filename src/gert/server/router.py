@@ -1,6 +1,7 @@
 """API router for GERT server."""
 
 import asyncio
+import io
 import logging
 import traceback
 import uuid
@@ -16,6 +17,7 @@ from fastapi import (
     status,
 )
 from fastapi import Path as FastApiPath
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
@@ -895,15 +897,23 @@ async def ingest_data(
 
 @router.get(
     "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/parameters",
-    summary="Retrieve parameter matrix",
-    description="Returns the parameter matrix for a given execution and iteration.",
+    summary="Retrieve parameter matrix as Parquet stream",
+    description="Returns the parameter matrix for a given execution and iteration "
+    "as an Apache Parquet binary stream. Ensure the client is configured to "
+    "receive and process application/vnd.apache.parquet Content-Type.",
+    responses={
+        200: {
+            "content": {"application/vnd.apache.parquet": {}},
+            "description": "The parameter matrix in Parquet format.",
+        },
+    },
 )
 async def get_parameters(
     experiment_id: str,
     execution_id: str,
     iteration: int,
-) -> list[dict[str, Any]]:
-    """Retrieve the parameter matrix as a list of dictionaries.
+) -> StreamingResponse:
+    """Retrieve the parameter matrix as a Parquet stream.
 
     Raises:
         HTTPException: If the experiment is not found.
@@ -930,7 +940,18 @@ async def get_parameters(
             execution_id=execution_id,
             iteration=iteration,
         )
-        return df.to_dicts()
+        buffer = io.BytesIO()
+        df.write_parquet(buffer)
+        buffer.seek(0)
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.apache.parquet",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename=parameters_{iteration}.parquet"
+                ),
+            },
+        )
     except FileNotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -940,16 +961,23 @@ async def get_parameters(
 
 @router.get(
     "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
-    summary="Retrieve consolidated responses",
+    summary="Retrieve consolidated responses as Parquet stream",
     description="Returns all consolidated responses for a given execution "
-    "and iteration.",
+    "and iteration as an Apache Parquet binary stream. Ensure the client is "
+    "configured to receive and process application/vnd.apache.parquet Content-Type.",
+    responses={
+        200: {
+            "content": {"application/vnd.apache.parquet": {}},
+            "description": "The consolidated responses in Parquet format.",
+        },
+    },
 )
 async def get_responses(
     experiment_id: str,
     execution_id: str,
     iteration: int,
-) -> list[dict[str, Any]]:
-    """Retrieve consolidated responses as a list of dictionaries.
+) -> StreamingResponse:
+    """Retrieve consolidated responses as a Parquet stream.
 
     Raises:
         HTTPException: If the experiment or data is not found.
@@ -976,7 +1004,18 @@ async def get_responses(
             execution_id=execution_id,
             iteration=iteration,
         )
-        return df.to_dicts()
+        buffer = io.BytesIO()
+        df.write_parquet(buffer)
+        buffer.seek(0)
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.apache.parquet",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename=responses_{iteration}.parquet"
+                ),
+            },
+        )
     except FileNotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

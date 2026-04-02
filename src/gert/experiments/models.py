@@ -2,10 +2,11 @@
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 class ParameterMetadata(BaseModel):
@@ -65,7 +66,10 @@ class ParameterMatrix(BaseModel):
     datasets: list[ParameterDataset] = Field(default_factory=list)
 
     # 3. Optional pre-computed or posterior DataFrame
-    dataframe: pl.DataFrame | None = Field(default=None, exclude=True)
+    dataframe: Annotated[pl.DataFrame | None, SkipJsonSchema()] = Field(
+        default=None,
+        exclude=True,
+    )
 
     def get_realizations(self, base_working_directory: Path | None = None) -> set[int]:
         """Get the set of all realization IDs in this parameter matrix.
