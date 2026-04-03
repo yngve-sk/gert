@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import shutil
 import sys
@@ -6,6 +7,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
+import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
@@ -128,7 +130,8 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
         f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
     )
     assert response.status_code == 200
-    data = response.json()
+    df = pl.read_parquet(io.BytesIO(response.content))
+    data = df.to_dicts()
     assert len(data) == 2
 
     realizations = [item["realization"] for item in data]

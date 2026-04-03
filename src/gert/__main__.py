@@ -306,7 +306,7 @@ def main() -> None:
         help="Enable auto-reload for development",
     )
 
-    # `gert monitor`
+    # `gert monitor` (deprecated/alias for backward compatibility without execution_id)
     monitor_parser = subparsers.add_parser(
         "monitor",
         help="Monitor an running GERT experiment",
@@ -317,6 +317,22 @@ def main() -> None:
         help="The ID of the experiment to monitor",
     )
     monitor_parser.add_argument(
+        "--api-url",
+        default="http://localhost:8000",
+        help="Base URL of the GERT server (default: http://localhost:8000)",
+    )
+
+    # `gert connect`
+    connect_parser = subparsers.add_parser(
+        "connect",
+        help="Connect the monitor to existing experiment executions",
+    )
+    connect_parser.add_argument(
+        "config",
+        type=Path,
+        help="Path to the experiment configuration JSON file",
+    )
+    connect_parser.add_argument(
         "--api-url",
         default="http://localhost:8000",
         help="Base URL of the GERT server (default: http://localhost:8000)",
@@ -341,6 +357,51 @@ def main() -> None:
         )
     elif args.command == "monitor":
         start_monitor(args.api_url, args.experiment_id)
+    elif args.command == "connect":
+        config_data = _load_config(args.config)
+        exp_name = config_data["name"]
+
+        client = httpx.Client(base_url=args.api_url)
+        server_process = None
+        try:
+            server_process = _ensure_server(client, args.api_url)
+
+            # Find experiment ID by name
+            resp = client.get("/experiments")
+            resp.raise_for_status()
+            experiments = resp.json()
+
+            experiment_id = None
+            for exp in experiments:
+                if exp["name"] == exp_name:
+                    experiment_id = exp["id"]
+                    break
+
+            if not experiment_id:
+                # If not found, register it now to make it known to the server.
+                # (Even if it's already in storage, registering ensures it's in memory)
+                print(
+                    f"Experiment '{exp_name}' not recognized by server. "
+                    f"Registering configuration...",
+                )
+                resp = client.post("/experiments", json=config_data)
+                resp.raise_for_status()
+                experiment_id = resp.json()["id"]
+
+            start_monitor(args.api_url, experiment_id)
+        except httpx.ConnectError:
+            print(
+                f"❌ Connection error: Could not connect to "
+                f"GERT server at {args.api_url}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        finally:
+            client.close()
+            if server_process is not None:
+                print("Shutting down temporary server...")
+                server_process.terminate()
+                server_process.wait()
 
 
 if __name__ == "__main__":

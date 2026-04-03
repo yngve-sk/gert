@@ -33,7 +33,11 @@ class GertForwardModelClient:
         self.iteration = iteration
         self.realization_id = realization_id
         self.source_step = source_step
-        self._client = httpx.Client(base_url=self.api_url, timeout=30.0)
+        self._client = httpx.Client(
+            base_url=self.api_url, 
+            timeout=httpx.Timeout(120.0, connect=10.0),
+            limits=httpx.Limits(max_connections=None, max_keepalive_connections=None)
+        )
 
     def _post_with_retry(
         self,
@@ -46,17 +50,37 @@ class GertForwardModelClient:
         Raises:
             httpx.HTTPError: If the request permanently fails.
         """
-        delay = 1.0
+        delay = 2.0
         last_exception: Exception | None = None
 
         for i in range(max_retries):
             try:
                 resp = self._client.post(endpoint, json=json_data)
                 resp.raise_for_status()
-            except (httpx.HTTPError, httpx.NetworkError) as e:
+            except httpx.HTTPStatusError as e:
+                # E.g. 404 Not Found, usually not retryable but we retry just in case
+                # server is restarting.
                 last_exception = e
                 logger.warning(
-                    f"Attempt {i + 1}/{max_retries} failed for {endpoint}: {e}. "
+                    f"HTTP {e.response.status_code} for {endpoint}: "
+                    f"Response text: {e.response.text}. Retrying in {delay}s...",
+                )
+                time.sleep(delay)
+                delay *= 2
+            except httpx.RequestError as e:
+                # E.g. ConnectTimeout
+                last_exception = e
+                logger.warning(
+                    f"Attempt {i + 1}/{max_retries} failed for {endpoint}: "
+                    f"{type(e).__name__}: {e}. "
+                    f"Retrying in {delay}s...",
+                )
+                time.sleep(delay)
+                delay *= 2
+            except Exception as e:
+                last_exception = e
+                logger.warning(
+                    f"Attempt {i + 1}/{max_retries} unexpected fail for {endpoint}: {e}. "
                     f"Retrying in {delay}s...",
                 )
                 time.sleep(delay)

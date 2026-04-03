@@ -24,6 +24,64 @@ class StorageAPI:
         """Initialize the query API with a base storage path."""
         self._base_storage_path = base_storage_path
 
+    def list_experiments(self) -> list[tuple[str, str]]:
+        """List all experiments in the storage directory.
+
+        Returns:
+            A list of tuples (experiment_id, experiment_name).
+        """
+        if not self._base_storage_path.exists():
+            return []
+
+        experiments = []
+        for exp_dir in self._base_storage_path.iterdir():
+            if not exp_dir.is_dir():
+                continue
+            config_file = exp_dir / "config.json"
+            if config_file.exists():
+                try:
+                    config = ExperimentConfig.model_validate_json(
+                        config_file.read_text(encoding="utf-8"),
+                    )
+                    experiments.append((exp_dir.name, config.name))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+        return experiments
+
+    def list_executions(self, experiment_id: str) -> list[ExecutionState]:
+        """List all executions for a given experiment.
+
+        Returns:
+            A list of ExecutionState objects, sorted by creation time (newest first).
+        """
+        exp_dir = self._base_storage_path / experiment_id
+        if not exp_dir.exists():
+            return []
+
+        executions = []
+        for exec_dir in exp_dir.iterdir():
+            if not exec_dir.is_dir():
+                continue
+            state_file = exec_dir / "execution_state.json"
+            if state_file.exists():
+                try:
+                    state = ExecutionState.model_validate_json(
+                        state_file.read_text(encoding="utf-8"),
+                    )
+                    executions.append(state)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        # Sort by last modified time of the execution_state.json or directory?
+        # Let's use the directory's creation time (or state file)
+        executions.sort(
+            key=lambda x: (exp_dir / x.execution_id / "execution_state.json")
+            .stat()
+            .st_mtime,
+            reverse=True,
+        )
+        return executions
+
     async def flush(
         self,
         experiment_id: str,

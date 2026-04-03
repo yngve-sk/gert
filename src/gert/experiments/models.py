@@ -459,9 +459,13 @@ class ExecutionState(BaseModel):
     status: str
     current_iteration: int = 0
     active_job_ids: list[str] = Field(default_factory=list)
+    active_realizations: list[int] = Field(default_factory=list)
     completed_realizations: list[int] = Field(default_factory=list)
     failed_realizations: list[int] = Field(default_factory=list)
     error: str | None = None
+
+    def model_post_init(self, context: Any, /) -> None:
+        print("h")
 
 
 class ResponsePayload(BaseModel):

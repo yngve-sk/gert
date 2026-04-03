@@ -174,9 +174,6 @@ class ExperimentOrchestrator:
         if force:
             for job_id in self._active_jobs[self._current_iteration].values():
                 self._job_submitter.cancel(job_id)
-            self._save_execution_state("PAUSED", self._current_iteration)
-        else:
-            self._save_execution_state("PAUSING", self._current_iteration)
 
     @property
     def is_paused(self) -> bool:
@@ -217,12 +214,15 @@ class ExperimentOrchestrator:
             )
             self._successful_steps[iteration][realization_id].add(step_name)
             if self._monitoring_callback:
-                self._monitoring_callback(
-                    realization_id,
-                    iteration,
-                    "COMPLETED",
-                    step_name,
-                )
+                try:
+                    self._monitoring_callback(
+                        realization_id,
+                        iteration,
+                        "COMPLETED",
+                        step_name,
+                    )
+                except Exception as e:
+                    logger.error(f"Monitoring callback failed: {e}")
 
         # A realization is complete only if ALL expected steps are successful
         expected_steps = {s.name for s in self._config.forward_model_steps}
@@ -236,7 +236,10 @@ class ExperimentOrchestrator:
             logger.info(msg)
             self._successful_realizations[iteration].add(realization_id)
             if self._monitoring_callback:
-                self._monitoring_callback(realization_id, iteration, "COMPLETED", None)
+                try:
+                    self._monitoring_callback(realization_id, iteration, "COMPLETED", None)
+                except Exception as e:
+                    logger.error(f"Monitoring callback failed: {e}")
 
         await self._check_iteration_complete(iteration)
 
@@ -254,12 +257,15 @@ class ExperimentOrchestrator:
             )
             self._failed_steps[iteration][realization_id].add(step_name)
             if self._monitoring_callback:
-                self._monitoring_callback(
-                    realization_id,
-                    iteration,
-                    "FAILED",
-                    step_name,
-                )
+                try:
+                    self._monitoring_callback(
+                        realization_id,
+                        iteration,
+                        "FAILED",
+                        step_name,
+                    )
+                except Exception as e:
+                    logger.error(f"Monitoring callback failed: {e}")
 
         # ANY step failure fails the whole realization
         if realization_id not in self._failed_realizations[iteration]:
@@ -268,7 +274,10 @@ class ExperimentOrchestrator:
             self._successful_realizations[iteration].discard(realization_id)
 
             if self._monitoring_callback:
-                self._monitoring_callback(realization_id, iteration, "FAILED", None)
+                try:
+                    self._monitoring_callback(realization_id, iteration, "FAILED", None)
+                except Exception as e:
+                    logger.error(f"Monitoring callback failed: {e}")
 
         await self._check_iteration_complete(iteration)
 
@@ -286,37 +295,6 @@ class ExperimentOrchestrator:
             # and potentially moves to the next iteration.
             await asyncio.sleep(0.1)
             self._iteration_events[iteration].set()
-
-    def _save_execution_state(
-        self,
-        status: str,
-        current_iteration: int,
-        error: str | None = None,
-    ) -> None:
-        """Serialize core state to a persistent backing store."""
-        if not self._storage_api:
-            return
-
-        active_jobs = list(self._active_jobs[current_iteration].values())
-        completed = list(self._successful_realizations[current_iteration])
-        failed = list(self._failed_realizations[current_iteration])
-
-        state = ExecutionState(
-            experiment_id=self._experiment_id,
-            execution_id=self._execution_id,
-            status=status,
-            current_iteration=current_iteration,
-            active_job_ids=active_jobs,
-            completed_realizations=completed,
-            failed_realizations=failed,
-            error=error,
-        )
-
-        self._storage_api.write_execution_state(
-            experiment_name=self._config.name,
-            execution_id=self._execution_id,
-            state_data=state,
-        )
 
     async def run_experiment(self) -> None:  # noqa: C901
         """Execute the full macro iteration loop (N+1 iterations)."""
@@ -339,7 +317,6 @@ class ExperimentOrchestrator:
             )
             current_parameters = current_parameters.replace_values_from_df(param_df)
         elif self._current_iteration == 0:
-            self._save_execution_state("RUNNING", 0)
             if self._storage_api:
                 self._storage_api.write_parameters(
                     experiment_id=self._config.name,
@@ -381,7 +358,9 @@ class ExperimentOrchestrator:
             self.run_iteration(
                 i,
                 current_parameters,
-            )  # 2. Wait for all realizations in this iteration to finish
+            )
+            
+            # 2. Wait for all realizations in this iteration to finish
             logger.info(f"Waiting for iteration {i} realizations to complete...")
             await self._wait_for_iteration(i)
             logger.info(f"All realizations for iteration {i} completed.")
@@ -517,7 +496,10 @@ class ExperimentOrchestrator:
         if self._monitoring_callback:
             for r_id in sorted(realizations):
                 if r_id not in skip_realizations:
-                    self._monitoring_callback(r_id, iteration, "PENDING", None)
+                    try:
+                        self._monitoring_callback(r_id, iteration, "PENDING", None)
+                    except Exception as e:
+                        logger.error(f"Monitoring callback failed: {e}")
 
         for r_id in sorted(realizations):
             if r_id in skip_realizations:
@@ -526,8 +508,6 @@ class ExperimentOrchestrator:
                 break
             job_id = self.evaluate_forward_model(r_id, iteration, parameters)
             self._active_jobs[iteration][r_id] = job_id
-
-        self._save_execution_state("RUNNING", iteration)
 
     def evaluate_forward_model(
         self,
@@ -678,6 +658,11 @@ class ExperimentOrchestrator:
                     psij.JobState.FAILED,
                     psij.JobState.CANCELED,
                 }:
+                    err_msg = getattr(status, 'message', None) or getattr(status, 'exception', 'No message')
+                    logger.error(
+                        f"PSI/J reported {status.state.name} for realization {realization_id}: "
+                        f"{err_msg}"
+                    )
                     asyncio.run_coroutine_threadsafe(
                         self.record_realization_fail(iteration, realization_id),
                         loop,
@@ -686,13 +671,16 @@ class ExperimentOrchestrator:
                 # to guarantee that all data ingestion is finished.
 
             if self._monitoring_callback:
-                loop.call_soon_threadsafe(
-                    self._monitoring_callback,
-                    realization_id,
-                    iteration,
-                    status.state.name,
-                    None,
-                )
+                try:
+                    loop.call_soon_threadsafe(
+                        self._monitoring_callback,
+                        realization_id,
+                        iteration,
+                        status.state.name,
+                        None,
+                    )
+                except Exception as e:
+                    logger.error(f"Monitoring callback threadsafe failed: {e}")
 
         return _status_cb
 

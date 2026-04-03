@@ -1,5 +1,16 @@
 """GERT server application."""
 
+import logging
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(name)s - %(message)s',
+    handlers=[
+        logging.FileHandler("gert_debug.log", mode="w"),
+        logging.StreamHandler()
+    ]
+)
+
 from fastapi import FastAPI
 
 from gert.server.router import router

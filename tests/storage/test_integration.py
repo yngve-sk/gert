@@ -1,9 +1,11 @@
 import asyncio
+import io
 import shutil
 from collections.abc import Generator
 from pathlib import Path
 
 import httpx
+import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
@@ -82,7 +84,8 @@ async def test_storage_integration_blast(clean_storage: None) -> None:
     )
     assert response.status_code == 200
 
-    data = response.json()
+    df = pl.read_parquet(io.BytesIO(response.content))
+    data = df.to_dicts()
     assert len(data) == 100
 
     # Verify a few values
@@ -157,5 +160,6 @@ async def test_storage_integration_concurrent_blast(clean_storage: None) -> None
         f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
     )
     assert response.status_code == 200
-    data = response.json()
+    df = pl.read_parquet(io.BytesIO(response.content))
+    data = df.to_dicts()
     assert len(data) == 100
