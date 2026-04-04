@@ -48,6 +48,8 @@ coverage.xml
 *.parquet
 *.jsonl
 
+!examples/semi_realistic/*.parquet
+
 .aider.*
 !.aider.conf.yml
 .clj-kondo
