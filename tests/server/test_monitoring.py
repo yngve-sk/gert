@@ -6,17 +6,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gert.experiments.models import (
-    ExecutionState,
     ExperimentConfig,
     ParameterMatrix,
     QueueConfig,
 )
 from gert.server.gert_server import create_gert_server
 from gert.server.router import (
+    ExecutionData,
     RealizationStatus,
-    _execution_states,
-    _executions_to_configs,
-    _experiment_statuses,
+    ServerState,
 )
 
 
@@ -32,30 +30,33 @@ def test_monitoring_api_get_status(test_client: TestClient) -> None:
     execution_id = "run_1-test"
     iteration = 1
     realization_id = 0
-    _experiment_statuses[execution_id][iteration][realization_id] = RealizationStatus(
+    server_state = ServerState.get()
+    server_state.clear()
+
+    config = ExperimentConfig(
+        name="test_exp",
+        base_working_directory=Path.cwd(),
+        forward_model_steps=[],
+        queue_config=QueueConfig(backend="local"),
+        parameter_matrix=ParameterMatrix(metadata={}, values={}, datasets=[]),
+        updates=[],
+        observations=[],
+    )
+    server_state.configs["test_exp"] = config
+
+    exec_data = ExecutionData(config)
+    exec_data.overarching_status = "RUNNING"
+    exec_data.statuses[iteration][realization_id] = RealizationStatus(
         realization_id=realization_id,
         iteration=iteration,
         status="COMPLETED",
     )
-
-    cfg = ExperimentConfig(
-        name="dummy",
-        base_working_directory=Path(),
-        forward_model_steps=[],
-        queue_config=QueueConfig(),
-        parameter_matrix=ParameterMatrix(),
-        observations=[],
+    server_state.executions[execution_id] = exec_data
+    server_state.experiment_executions["test_exp"].append(execution_id)
+    server_state.latest_execution_id["test_exp"] = execution_id
+    response = test_client.get(
+        f"/experiments/test_exp/executions/{execution_id}/status",
     )
-    _executions_to_configs[execution_id] = cfg
-    _execution_states[execution_id] = ExecutionState(
-        experiment_id="dummy",
-        execution_id=execution_id,
-        status="RUNNING",
-    )
-
-    # Note: We are testing the specific execution status endpoint here
-    # Since we didn't register a config, we use a dummy experiment_id
-    response = test_client.get(f"/experiments/dummy/executions/{execution_id}/status")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1

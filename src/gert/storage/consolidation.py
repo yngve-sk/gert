@@ -79,10 +79,27 @@ class ConsolidationWorker:
             try:
                 records = await self._parse_jsonl_file(processing_file)
                 if not records:
+                    logger.debug(f"No records found in {processing_file}")
                     return
 
                 buckets = self._group_records_by_schema(records)
+                if not buckets:
+                    logger.warning(
+                        f"Parsed {len(records)} records from {processing_file} "
+                        f"but failed to group them into any schema buckets. "
+                        f"Check record format.",
+                    )
+                    # We return here and the finally block will UNLINK it.
+                    # Actually, if we have records but no buckets,
+                    # we might want to keep it?
+                    # For now, let's just log it clearly.
+                    return
+
                 self._process_buckets(buckets)
+                logger.info(
+                    f"Consolidated {len(records)} records into "
+                    f"{len(buckets)} schema buckets for {self._ensemble_path}",
+                )
 
             except Exception:
                 logger.exception("Unexpected error during consolidation")

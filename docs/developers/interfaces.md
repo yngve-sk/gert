@@ -26,8 +26,8 @@ This module isolates all high-throughput disk I/O, message queuing, and Parquet 
     * `start_watching(interval: float)`
     * *Implementation details:* Initialized with an `ensemble_path`. Uses `polars` to continuously drain the `.jsonl` queue, perform upserts/joins, and update the analytical columnar `.parquet` datasets.
 * **`StorageQueryAPI` (Interface)**
-    * `get_parameters(experiment_id: str, execution_id: str, iteration: int) -> DataFrame`
-    * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None) -> DataFrame`
+    * `get_parameters(experiment_id: str, execution_id: str, iteration: int) -> DataFrame`: API endpoint streams data as `application/vnd.apache.parquet`.
+    * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None) -> DataFrame`: API endpoint streams data as `application/vnd.apache.parquet`.
     * `get_manifest(experiment_id: str, execution_id: str, iteration: int) -> dict[str, float]`: Lightweight cache-busting endpoint returning the latest `.parquet` modification timestamps.
     * `flush(experiment_id: str, execution_id: str, iteration: int) -> bool`: Forces the Consolidator to drain the queue entirely before returning.
     * `get_update_metadata(experiment_id: str, execution_id: str, iteration: int) -> UpdateMetadata`: Retrieves the state, configuration, and metrics of the mathematical update that produced this iteration.

@@ -27,6 +27,7 @@ dependencies = [
     "numpy",
     "networkx",
     "textual-plot>=0.10.1",
+    "httpx",
 ]
 
 [project.scripts]
@@ -42,7 +43,6 @@ dev = [
     "mypy==1.19.1",
     "pre-commit",
     "ruff==0.15.6",
-    "httpx",
 ]
 style = ["pre-commit"]
 types = ["mypy"]

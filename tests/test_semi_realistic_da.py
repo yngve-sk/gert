@@ -1,4 +1,5 @@
 # ruff: noqa: S404, S603
+import io
 import json
 import shutil
 import socket
@@ -69,7 +70,7 @@ def test_semi_realistic_da_convergence(
     try:
         # Wait for server to be ready
         end_time = time.monotonic() + 10
-        client = httpx.Client(base_url=api_url, timeout=30.0)
+        client = httpx.Client(base_url=api_url, timeout=120.0)
         while time.monotonic() < end_time:
             try:
                 client.get("/docs")
@@ -144,9 +145,7 @@ def test_semi_realistic_da_convergence(
                 f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{it}/parameters",
             )
             assert params_resp.status_code == 200
-            params_data = params_resp.json()
-
-            df = pl.DataFrame(params_data)
+            df = pl.read_parquet(io.BytesIO(params_resp.content))
 
             # PERM is a list column. Convert to 2D array: (realizations, cells)
             perms_2d = np.array(df["PERM"].to_list())

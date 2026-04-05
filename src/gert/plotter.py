@@ -1,10 +1,11 @@
 """Plotting overlay for the GERT CLI monitor."""
 
 import contextlib
+import io
 import json
 import typing
 import urllib.request
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from urllib.error import URLError
 
 import polars as pl
@@ -126,6 +127,10 @@ class PlotterScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         """Fetch data when the screen mounts."""
+        self.log.info(
+            f"PlotterScreen mounted for {self.scope_node.node_type} "
+            f"(iter={self.scope_node.iteration})",
+        )
         self.query_one("#main-plot").display = False
         self.fetch_data()
         self.set_interval(1.0, self.poll_manifest)
@@ -162,38 +167,46 @@ class PlotterScreen(ModalScreen[None]):
             f"executions/{self.execution_id}/ensembles/{it}/parameters"
         )
 
-        resps_data: list[dict[str, Any]] = []
-        params_data: list[dict[str, Any]] = []
+        resps_df = pl.DataFrame()
+        params_df = pl.DataFrame()
 
         try:
             req = urllib.request.Request(resps_url)  # noqa: S310
             with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
                 if resp.getcode() == 200:
-                    resps_data = json.loads(resp.read().decode("utf-8"))
+                    data_bytes = resp.read()
+                    if data_bytes:
+                        resps_df = pl.read_parquet(io.BytesIO(data_bytes))
         except URLError:
             pass
+        except Exception as e:  # noqa: BLE001
+            self.log.warning(f"Failed to fetch responses: {e}")
 
         try:
             req = urllib.request.Request(params_url)  # noqa: S310
             with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
                 if resp.getcode() == 200:
-                    params_data = json.loads(resp.read().decode("utf-8"))
+                    data_bytes = resp.read()
+                    if data_bytes:
+                        params_df = pl.read_parquet(io.BytesIO(data_bytes))
         except URLError:
             pass
+        except Exception as e:  # noqa: BLE001
+            self.log.warning(f"Failed to fetch parameters: {e}")
 
-        self.app.call_from_thread(self._on_data_fetched, resps_data, params_data)
+        self.app.call_from_thread(self._on_data_fetched, resps_df, params_df)
 
     def _on_data_fetched(  # noqa: C901
         self,
-        resps_data: list[dict[str, Any]],
-        params_data: list[dict[str, Any]],
+        resps_df: pl.DataFrame,
+        params_df: pl.DataFrame,
     ) -> None:
         """Handle the fetched data and populate the UI."""
         self.query_one("#plot-loading").display = False
         self.query_one("#main-plot").display = True
 
-        if resps_data:
-            df = pl.DataFrame(resps_data)
+        if not resps_df.is_empty():
+            df = resps_df
             meta_cols = {
                 "realization",
                 "value",
@@ -220,10 +233,7 @@ class PlotterScreen(ModalScreen[None]):
         else:
             self.resps_df = pl.DataFrame()
 
-        if params_data:
-            self.params_df = pl.DataFrame(params_data)
-        else:
-            self.params_df = pl.DataFrame()
+        self.params_df = params_df
 
         # Update variable list if not previously loaded
         opt_list = self.query_one("#variable-list", OptionList)
@@ -333,6 +343,11 @@ class PlotterScreen(ModalScreen[None]):
             return
 
         self._prepare_plot()
+
+    async def action_dismiss(self, result: None = None) -> None:
+        """Close the plotter screen."""
+        self.log.info("PlotterScreen dismiss requested")
+        self.dismiss(result)
 
     def action_cycle_x_axis(self) -> None:
         """Cycle through available X-axes."""
@@ -497,7 +512,7 @@ class PlotterScreen(ModalScreen[None]):
                     pw.scatter(
                         bucket_df.get_column("i").to_list(),
                         bucket_df.get_column("j").to_list(),
-                        marker="■",
+                        marker=".",
                         marker_style=colors[b],
                         label=f"{lower:.2f}-{upper:.2f}",
                         hires_mode=HiResMode.BRAILLE,
@@ -543,6 +558,12 @@ class PlotterScreen(ModalScreen[None]):
                 # Use plot for lines
 
                 with contextlib.suppress(Exception):
-                    pw.scatter(x_vals, y_vals, marker="o", label=label)
+                    pw.scatter(
+                        x_vals,
+                        y_vals,
+                        marker=".",
+                        label=label,
+                        hires_mode=HiResMode.BRAILLE,
+                    )
 
         self.query_one("#plot-footer", Label).update(footer_text)

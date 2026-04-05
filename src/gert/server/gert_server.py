@@ -1,8 +1,23 @@
 """GERT server application."""
 
+import logging
+import pathlib
+
 from fastapi import FastAPI
 
 from gert.server.router import router
+
+pathlib.Path("logs").mkdir(exist_ok=True, parents=True)
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    handlers=[
+        logging.FileHandler("logs/gert.log", mode="w"),
+        logging.FileHandler("logs/combined.log", mode="a"),
+        logging.StreamHandler(),
+    ],
+)
 
 
 def create_gert_server() -> FastAPI:

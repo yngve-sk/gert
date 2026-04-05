@@ -57,7 +57,11 @@ def base_config() -> ExperimentConfig:
 @pytest.fixture
 def orchestrator(base_config: ExperimentConfig) -> ExperimentOrchestrator:
     """Provide an ExperimentOrchestrator instance with real dependencies."""
-    return ExperimentOrchestrator(config=base_config, experiment_id="test-exp-id")
+    return ExperimentOrchestrator(
+        config=base_config,
+        experiment_id="test-exp-id",
+        api_url="",
+    )
 
 
 class TestExperimentOrchestrator:
@@ -97,7 +101,11 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
+        orchestrator = ExperimentOrchestrator(
+            config=config,
+            experiment_id="test-exp",
+            api_url="",
+        )
         with pytest.raises(ValueError, match="Iteration number must be >= 0"):
             orchestrator.run_iteration(-1, ParameterMatrix())
 
@@ -114,7 +122,11 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
+        orchestrator = ExperimentOrchestrator(
+            config=config,
+            experiment_id="test-exp",
+            api_url="",
+        )
         with pytest.raises(ValueError, match="Realization number must be >= 0"):
             orchestrator.evaluate_forward_model(-1, 0, ParameterMatrix())
 
@@ -131,7 +143,11 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
+        orchestrator = ExperimentOrchestrator(
+            config=config,
+            experiment_id="test-exp",
+            api_url="",
+        )
         with pytest.raises(ValueError, match="Iteration number must be >= 0"):
             orchestrator.evaluate_forward_model(0, -1, ParameterMatrix())
 
@@ -156,7 +172,11 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
+        orchestrator = ExperimentOrchestrator(
+            config=config,
+            experiment_id="test-exp",
+            api_url="",
+        )
 
         # Mock submitter to write logs and call callback immediately
         def side_effect_submit(
@@ -221,7 +241,11 @@ class TestExperimentOrchestrator:
             parameter_matrix=ParameterMatrix(),
             observations=[],
         )
-        orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
+        orchestrator = ExperimentOrchestrator(
+            config=config,
+            experiment_id="test-exp",
+            api_url="",
+        )
         exp_id = orchestrator.execution_id
         storage = orchestrator._storage_api
 

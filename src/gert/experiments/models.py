@@ -2,10 +2,11 @@
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 class ParameterMetadata(BaseModel):
@@ -65,7 +66,10 @@ class ParameterMatrix(BaseModel):
     datasets: list[ParameterDataset] = Field(default_factory=list)
 
     # 3. Optional pre-computed or posterior DataFrame
-    dataframe: pl.DataFrame | None = Field(default=None, exclude=True)
+    dataframe: Annotated[pl.DataFrame | None, SkipJsonSchema()] = Field(
+        default=None,
+        exclude=True,
+    )
 
     def get_realizations(self, base_working_directory: Path | None = None) -> set[int]:
         """Get the set of all realization IDs in this parameter matrix.
@@ -75,6 +79,9 @@ class ParameterMatrix(BaseModel):
 
         Returns:
             A set of integer realization IDs.
+
+        Raises:
+            FileNotFoundError: If referenced datasets do not exist.
         """
         if self.dataframe is not None:
             return set(self.dataframe["realization"].to_list())
@@ -104,6 +111,9 @@ class ParameterMatrix(BaseModel):
                             .collect()
                         )
                         realizations.update(df["realization"].to_list())
+                else:
+                    msg = f"Dataset file not found: {source_path}"
+                    raise FileNotFoundError(msg)
 
         return realizations
 
@@ -416,6 +426,36 @@ class ExperimentConfig(BaseModel):
             ).resolve()
         return self
 
+    @property
+    def num_iterations(self) -> int:
+        """Return the total number of iterations (Prior + N updates)."""
+        return len(self.updates) + 1
+
+    @property
+    def num_realizations(self) -> int:
+        """Return the total number of realizations in the ensemble."""
+        return len(self.parameter_matrix.get_realizations(self.base_working_directory))
+
+    @property
+    def num_fm_steps(self) -> int:
+        """Return the number of forward model steps."""
+        return len(self.forward_model_steps)
+
+    @property
+    def step_names(self) -> list[str]:
+        """Return the names of the forward model steps."""
+        return [s.name for s in self.forward_model_steps]
+
+    @property
+    def num_observations(self) -> int:
+        """Return the total number of observations."""
+        return len(self.observations)
+
+    @property
+    def num_parameters(self) -> int:
+        """Return the total number of parameters."""
+        return len(self.parameter_matrix.metadata)
+
 
 class ExecutionState(BaseModel):
     """Overall state of an experiment execution."""
@@ -425,6 +465,7 @@ class ExecutionState(BaseModel):
     status: str
     current_iteration: int = 0
     active_job_ids: list[str] = Field(default_factory=list)
+    active_realizations: list[int] = Field(default_factory=list)
     completed_realizations: list[int] = Field(default_factory=list)
     failed_realizations: list[int] = Field(default_factory=list)
     error: str | None = None

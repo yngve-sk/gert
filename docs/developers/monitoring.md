@@ -76,6 +76,18 @@ To capture step-level status and logs without requiring a resident agent on comp
 ## Data Model
 All monitoring data adheres to GERT's immutable configuration pattern. The execution state is strictly observable and can never be modified through the monitoring interface.
 
+## Commands & Usage
+
+### 1. `gert run --monitor`
+When an experiment is started with the `--monitor` flag, the CLI automatically launches the `textual` application immediately after submitting the experiment to the backend. The monitor will track the live execution until completion, and remain open afterward.
+
+### 2. `gert connect`
+To attach the TUI monitor to existing or historical runs of an experiment, use the connect command with the experiment's configuration file:
+```bash
+gert connect path/to/experiment.json [--api-url http://localhost:8000]
+```
+The CLI parses the configuration to determine the permanent storage location, then launches a temporary, background instance of the standard GERT server (if one isn't already available at `--api-url`). The TUI initially presents an **Execution Browser** listing all historical and active executions (runs) of this configuration. The user selects an execution to drill down into the standard monitoring layout. There is no special-case "offline viewer"; the monitor always talks to a real, generic GERT server.
+
 ## Implementation Status
 - [ ] Backend monitoring APIs
 - [ ] TUI monitor application (`textual`)

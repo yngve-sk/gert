@@ -4,8 +4,16 @@ This document defines the required information architecture and data points for 
 
 The monitoring interface is organized hierarchically. As a user navigates deeper into the execution tree, the views transition from high-level aggregations to granular execution details.
 
-## 1. Global / Application View
-This view provides persistent, high-level context regardless of the specific node selected in the navigation tree.
+## 1. Execution Browser View (Cross-Execution)
+This is the highest-level view in the TUI, acting as a directory of all runs for a specific experiment configuration.
+
+*   **Content:** A list or table of all discovered executions for the loaded experiment configuration, sorted from newest to oldest.
+*   **Metrics:** Displays the Execution ID, Start/Last Modified Time, and overall Status (fetched via the API).
+*   **Interaction:** The user navigates the list, selects an execution, and presses `Enter` to drill down into the standard execution dashboard (described below).
+*   **Navigation:** Users currently viewing a specific execution's dashboard can always navigate "up" (e.g., by pressing `Escape` or `b`) to return to this Execution Browser, allowing seamless switching between historical and active runs.
+
+## 2. Global / Application View (Per-Execution)
+This view provides persistent, high-level context for a *single* execution, regardless of the specific node selected in the navigation tree.
 
 ### 1.1 Header & Status Summary
 *   **Experiment Identifier**: The `experiment_id` and `execution_id` currently being monitored.
@@ -23,11 +31,13 @@ A tabular or list view summarizing the progress of *all* iterations in the exper
 
 ---
 
-## 2. Detail Views (Node-Specific)
+## 3. Detail Views (Node-Specific)
 When a specific node in the hierarchical execution tree is selected, the detail pane updates to show context-specific information.
 
-### 2.1 Experiment (Root) Summary
+### 3.1 Experiment (Root) Summary
 Displayed when the root node of the experiment is selected. It acts as the primary dashboard for the run.
+
+*Note: To build this dashboard, client applications should fetch the full `/experiments/{experiment_id}/config` endpoint. In Python contexts, the `ExperimentConfig` Pydantic model provides pure function getters (e.g., `.num_iterations`, `.num_observations`, `.num_parameters`) to efficiently compute these structural bounds dynamically without requiring a dedicated metadata endpoint.*
 
 **Identification & Scope**
 *   **Name**: `ExperimentConfig.name`
@@ -43,7 +53,7 @@ Displayed when the root node of the experiment is selected. It acts as the prima
 *   **📅 Started**: ISO timestamp of when the execution began (extracted from the earliest step start time or an execution-level timestamp).
 *   **🕒 Elapsed Time**: Total time since the experiment began (calculated from start time to current time, or end time if completed).
 
-### 2.2 Iteration Summary
+### 3.2 Iteration Summary
 Displayed when an `Iteration N` node is selected.
 
 **Iteration Metrics**
@@ -59,7 +69,7 @@ Displayed when an `Iteration N` node is selected.
 *   **🎯 Average Normalized Misfit**: The `average_normalized_misfit` from the `ObservationSummary` (shows how far the ensemble is from the truth, scaled by uncertainty).
 *   **📉 Average Absolute Residual**: The raw physical unit error (`average_absolute_residual`).
 
-### 2.3 Mathematical Update Summary
+### 3.3 Mathematical Update Summary
 Displayed when an `🧮✨ Update (Iter N-1 → N)` node is selected.
 
 **Algorithm & Status**
@@ -73,7 +83,7 @@ Displayed when an `🧮✨ Update (Iter N-1 → N)` node is selected.
 *   **Configuration**: JSON/Dictionary representation of the specific hyperparameters passed to the algorithm (`UpdateMetadata.configuration`).
 *   **Metrics**: Custom metrics emitted by the algorithm (e.g., `prior_variance`, `posterior_variance`, `misfit_bias`).
 
-### 2.4 Realization Summary
+### 3.4 Realization Summary
 Displayed when a specific `Realization R (It N)` node is selected.
 
 **Status & Identification**
@@ -87,7 +97,7 @@ Displayed when a specific `Realization R (It N)` node is selected.
 *   **Last Response Details**:
     *   Key/Value pairs of the most recently emitted response (e.g., `response: FOPR`, `time: 10`, `Value: 123.45`).
 
-### 2.5 Step Detail View
+### 3.5 Step Detail View
 Displayed when a specific forward model step node is selected under a realization.
 
 **Execution Context**
@@ -102,7 +112,7 @@ Displayed when a specific forward model step node is selected under a realizatio
 
 ---
 
-## 3. UI/UX Conventions (CLI vs. Web)
+## 4. UI/UX Conventions (CLI vs. Web)
 
 While the data requirements are identical, the presentation formats differ based on the medium:
 
@@ -116,3 +126,14 @@ While the data requirements are identical, the presentation formats differ based
     *   🧮✨ for Mathematical Updates.
 *   **Live Updates**: Views must handle asynchronous updates gracefully. If an iteration is currently running, misfit statistics won't exist yet; the UI should display "N/A", "Calculating...", or hide the field rather than throwing an error.
 *   **Navigation**: The CLI uses a Tree widget on the left. A Web GUI might use a similar sidebar, breadcrumbs, or drill-down cards.
+
+## 5. Connecting to Existing Experiments (`gert connect`)
+
+GERT allows users to attach the monitoring TUI to historical or currently running experiments without needing to memorize complex IDs. Instead of requiring an explicit `experiment_id` and `execution_id`, the user simply provides the original configuration file.
+
+*   **Command:** `gert connect <config.json> [OPTIONS]`
+*   **Discovery:** The CLI reads the `config.json` to determine the experiment `name` and the `storage_base` (permanent storage directory). It scans this directory to discover all previous and ongoing executions associated with this experiment.
+*   **Server Lifecycle:** The TUI relies entirely on the GERT server's REST API for all data. If a GERT server is not currently running at the specified `--api-url`, the `gert connect` command **must temporarily spawn a standard background server**. This is exactly the same generic experiment server started by `gert server` or `gert run`. It relies on the server's existing functionality to load state from the local permanent storage. It should never circumvent the API to read parquet/json files directly from disk.
+*   **Entry Point:** Unlike `gert run --monitor` (which launches directly into the newly started execution's dashboard), `gert connect` launches at the **Execution Browser View**, displaying all executions sorted newest to oldest.
+*   **Offline/Completed Experiments:** Once an execution is selected, the monitor loads perfectly via the API, even if the run is fully complete or failed. It retrieves the static terminal state, parses the final datasets, and allows the user to browse logs and plot data exactly as if it had just finished running.
+*   **Persistence:** The TUI opened by `gert connect` remains open until explicitly closed by the user (via `q` or `ctrl+c`), regardless of whether the underlying experiment finishes its execution while the monitor is attached.

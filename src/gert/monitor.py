@@ -1,23 +1,57 @@
 """CLI Monitor for GERT experiments using Textual."""
 
+import io
 import json
+import logging
+import pathlib
 import time
-import traceback
 import urllib.request
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.error import URLError
 
+import httpx
+import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
-from textual.widgets import Footer, Header, Label, ProgressBar, Static, Tree
+from textual.css.query import NoMatches, WrongType
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, Header, Label, ProgressBar, Static, Tree
 from textual.widgets.tree import TreeNode
 
-from gert.experiments.models import ObservationSummary, UpdateMetadata
+from gert.experiments.models import ExperimentConfig, ObservationSummary, UpdateMetadata
 from gert.plotter import PlotterScreen
+
+
+def _get_monitor_logger() -> logging.Logger:
+    """Configure and return a dedicated logger for the TUI monitor."""
+    pathlib.Path("logs").mkdir(exist_ok=True, parents=True)
+    logger = logging.getLogger("gert.monitor")
+
+    # Only configure if no handlers are present
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+
+        # Dedicated monitor log
+        fh = logging.FileHandler("logs/tui_monitor.log", mode="a")
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(fh)
+
+        # Combined log
+        ch = logging.FileHandler("logs/combined.log", mode="a")
+        ch.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s"),
+        )
+        logger.addHandler(ch)
+
+    return logger
+
+
+logger = _get_monitor_logger()
 
 
 class StepState(BaseModel):
@@ -95,6 +129,120 @@ PREFIX_DONE = "[green]✓[/]"
 PREFIX_FAIL = "[red]✗[/]"
 
 
+class ExecutionBrowserScreen(Screen[str]):
+    """Screen to browse and select an execution."""
+
+    BINDINGS: ClassVar[list[Any]] = [
+        ("q", "quit", "Quit"),
+        ("r", "refresh", "Refresh"),
+    ]
+
+    def __init__(self, api_url: str, experiment_id: str) -> None:
+        super().__init__()
+        self.api_url = api_url
+        self.experiment_id = experiment_id
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Label(
+            f"Executions for experiment: [bold blue]{self.experiment_id}[/]",
+            id="browser-title",
+        )
+        yield DataTable(id="execution-table")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_columns("Execution ID", "Status", "Last Update", "Iteration")
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        self._fetch_executions()
+
+    def action_refresh(self) -> None:
+        self._fetch_executions()
+
+    @work(exclusive=True, thread=True)
+    def _fetch_executions(self) -> None:
+        url = f"{self.api_url}/experiments/{self.experiment_id}/executions"
+        try:
+            req = urllib.request.Request(url)  # noqa: S310
+            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
+                if response.getcode() == 200:
+                    data = json.loads(response.read().decode("utf-8"))
+                    # ExecutionState objects
+                    self.app.call_from_thread(self._update_table, data)
+        except (URLError, json.JSONDecodeError):
+            pass
+
+    def _update_table(self, executions: list[dict[str, Any]]) -> None:
+        table = self.query_one(DataTable)
+        table.clear()
+        for exec_data in executions:
+            table.add_row(
+                exec_data["execution_id"],
+                exec_data["status"],
+                exec_data.get("last_modified", "N/A"),
+                str(exec_data.get("current_iteration", 0)),
+                key=exec_data["execution_id"],
+            )
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection to switch to monitor dashboard."""
+        exec_id = str(event.row_key.value)
+        self.dismiss(exec_id)
+
+
+class MonitorDashboardScreen(Screen[None]):
+    """Main dashboard screen for monitoring a specific execution."""
+
+    BINDINGS: ClassVar[list[Any]] = [
+        ("b", "browser", "Execution Browser"),
+        ("e", "expand_all", "Expand/Collapse All"),
+        ("p", "toggle_plotter", "Plotter"),
+    ]
+
+    def __init__(self, api_url: str, experiment_id: str, execution_id: str) -> None:
+        super().__init__()
+        self.api_url = api_url
+        self.experiment_id = experiment_id
+        self.execution_id = execution_id
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(id="top-pane"):
+            yield StateSummary("Waiting for data...", id="summary-container")
+            with ProgressView(id="progress-container"):
+                yield Horizontal(
+                    Label("Ensemble", classes="iteration-label"),
+                    Label("Progress Bar", classes="header-label-centered"),
+                    Label(
+                        f"{ICON_FM} Steps | {ICON_RES} Resps | avg norm misfit",
+                        classes="iteration-counter",
+                    ),
+                    classes="header-row",
+                )
+
+        with Horizontal(id="bottom-pane"):
+            yield NavigationTree(
+                f"Experiment {self.experiment_id} ({self.execution_id})",
+                id="tree-view",
+            )
+            yield ResponseViewer(
+                "Select a realization or step to view details.",
+                id="response-view",
+            )
+        yield Footer()
+
+    def action_browser(self) -> None:
+        self.dismiss()
+
+    def action_toggle_plotter(self) -> None:
+        """Forward plot toggle to the main app."""
+        logger.info("Toggle plotter invoked from MonitorDashboardScreen")
+        if hasattr(self.app, "action_toggle_plotter"):
+            self.app.action_toggle_plotter()
+
+
 class NodeData(BaseModel):
     """Data attached to each tree node for navigation details."""
 
@@ -132,29 +280,6 @@ class NavigationTree(Tree[NodeData | None]):
 
 
 class GertMonitorApp(App[None]):
-    """Textual application for GERT experiment monitoring."""
-
-    api_url: str
-    experiment_id: str
-    execution_id: str
-    expected_count: int | None
-    num_iterations: int
-    status_url: str
-    responses_url: str | None
-
-    _statuses: dict[tuple[int, int], RealizationState]
-    _responses: dict[int, dict[int, list[ResponseItem]]]
-    _iteration_nodes: dict[int, TreeNode[NodeData | None]]
-    _update_nodes: dict[int, TreeNode[NodeData | None]]
-    _update_metadata_cache: dict[int, UpdateMetadata]
-    _observation_summaries: dict[int, ObservationSummary]
-    _realization_nodes: dict[tuple[int, int], TreeNode[NodeData | None]]
-    _step_nodes: dict[tuple[int, int, str], TreeNode[NodeData | None]]
-    _iteration_bar_widgets: dict[int, tuple[ProgressBar, Label]]
-    _selected_item: NodeData | None
-    _total_steps_in_config: int | None
-    _num_fm_steps: int
-
     CSS = """
     Screen {
         layout: vertical;
@@ -233,20 +358,6 @@ class GertMonitorApp(App[None]):
         ("p", "toggle_plotter", "Plotter"),
     ]
 
-    def action_toggle_plotter(self) -> None:
-        """Open the plotter screen for the selected node."""
-        if not self._selected_item:
-            return
-
-        self.push_screen(
-            PlotterScreen(
-                self.api_url,
-                self.experiment_id,
-                self.execution_id,
-                self._selected_item,
-            ),
-        )
-
     def __init__(
         self,
         api_url: str,
@@ -257,96 +368,101 @@ class GertMonitorApp(App[None]):
         super().__init__()
         self.api_url = api_url
         self.experiment_id = experiment_id
-        exec_id: str = execution_id or ""
-        self.execution_id = exec_id
+        self.execution_id = execution_id or ""
 
-        # To be populated via _fetch_metadata
+        # To be populated via _fetch_config
         self.num_iterations = 0
         self.expected_count = 0
         self._num_fm_steps = 0
+        self.num_observations = 0
+        self.num_parameters = 0
+        self.experiment_name = ""
 
-        if not self.execution_id:
-            self.status_url = f"{api_url}/experiments/{experiment_id}/status"
-        else:
+        self._reset_state()
+
+    def _reset_state(self) -> None:
+        self._statuses: dict[tuple[int, int], RealizationState] = {}
+        self._responses: dict[int, dict[int, list[ResponseItem]]] = {}
+        self._iteration_nodes: dict[int, TreeNode[NodeData | None]] = {}
+        self._update_nodes: dict[int, TreeNode[NodeData | None]] = {}
+        self._update_metadata_cache: dict[int, UpdateMetadata] = {}
+        self._observation_summaries: dict[int, ObservationSummary] = {}
+        self._realization_nodes: dict[tuple[int, int], TreeNode[NodeData | None]] = {}
+        self._step_nodes: dict[tuple[int, int, str], TreeNode[NodeData | None]] = {}
+        self._iteration_bar_widgets: dict[int, tuple[ProgressBar, Label]] = {}
+        self._exiting: bool = False
+        self._selected_item: NodeData | None = None
+        self._total_steps_in_config: int | None = None
+
+        if self.execution_id:
             self.status_url = (
-                f"{api_url}/experiments/{experiment_id}/executions/"
+                f"{self.api_url}/experiments/{self.experiment_id}/executions/"
                 f"{self.execution_id}/status"
             )
-        self.responses_url = None
-
-        self._statuses = {}
-        self._responses = {}
-        self._iteration_nodes = {}
-        self._update_nodes = {}
-        self._update_metadata_cache = {}
-        self._observation_summaries = {}
-        self._realization_nodes = {}
-        self._step_nodes = {}
-        self._iteration_bar_widgets = {}
-        self._exiting = False
-        self._selected_item = None
-        self._total_steps_in_config = None
-        self._num_fm_steps = 0
+        else:
+            self.status_url = ""
 
     def compose(self) -> ComposeResult:
-        """Compose the application layout.
-
-        Yields:
-            Layout widgets.
-        """
         yield Header()
-        with Vertical(id="top-pane"):
-            yield StateSummary("Waiting for data...", id="summary-container")
-            with ProgressView(id="progress-container"):
-                yield Horizontal(
-                    Label("Ensemble", classes="iteration-label"),
-                    Label("Progress Bar", classes="header-label-centered"),
-                    Label(
-                        f"{ICON_FM} Steps | {ICON_RES} Resps | avg norm misfit",
-                        classes="iteration-counter",
-                    ),
-                    classes="header-row",
-                )
-
-        with Horizontal(id="bottom-pane"):
-            yield NavigationTree(
-                f"Experiment {self.experiment_id} "
-                f"({'Latest' if not self.execution_id else self.execution_id})",
-                id="tree-view",
-            )
-            yield ResponseViewer(
-                "Select a realization or step to view details.",
-                id="response-view",
-            )
+        yield Label("Initializing...")
         yield Footer()
 
     def on_mount(self) -> None:
-        """Set up the application on mount."""
-        self.title = f"GERT Monitor - {self.experiment_id}"
-        tree = self.query_one("#tree-view", NavigationTree)
-        tree.root.expand()
+        self._fetch_config()
+        # Push browser as the root screen
+        self.push_screen(
+            ExecutionBrowserScreen(self.api_url, self.experiment_id),
+            callback=self._show_dashboard,
+        )
+        if self.execution_id:
+            # If starting with a specific execution, push dashboard on top
+            self.push_screen(
+                MonitorDashboardScreen(
+                    self.api_url,
+                    self.experiment_id,
+                    self.execution_id,
+                ),
+            )
+            self.poll_api()
 
-        self.set_interval(1.0, self._update_response_viewer)
-        self._fetch_metadata()
+    def _show_browser(self) -> None:
+        # Browser is usually pushed at mount or when popping
+        pass
+
+    def _show_dashboard(self, execution_id: str | None) -> None:
+        if not execution_id:
+            # Browser was closed without selection
+            self.exit()
+            return
+
+        self.execution_id = execution_id
+        self._reset_state()
+        self.push_screen(
+            MonitorDashboardScreen(self.api_url, self.experiment_id, execution_id),
+        )
         self.poll_api()
 
+    def stop_polling(self) -> None:
+        self._exiting = True
+
     @work(exclusive=True, thread=True)
-    def _fetch_metadata(self) -> None:
-        """Fetch the experiment metadata to know the planned bounds."""
-        url = f"{self.api_url}/experiments/{self.experiment_id}/metadata"
+    def _fetch_config(self) -> None:
+        """Fetch the experiment config to know the planned bounds."""
+        url = f"{self.api_url}/experiments/{self.experiment_id}/config"
         try:
             req = urllib.request.Request(url)  # noqa: S310
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                 if response.getcode() == 200:
-                    meta = json.loads(response.read().decode("utf-8"))
-                    self.experiment_name = meta.get("name", self.experiment_id)
-                    self.num_observations = int(meta.get("num_observations", 0))
-                    self.num_parameters = int(meta.get("num_parameters", 0))
-                    self.num_iterations = int(meta.get("num_iterations", 0))
-                    self.expected_count = int(meta.get("num_realizations", 0))
-                    self._num_fm_steps = int(meta.get("num_fm_steps", 0))
+                    config_json = response.read().decode("utf-8")
+                    config = ExperimentConfig.model_validate_json(config_json)
+                    self.experiment_name = config.name
+                    self.num_observations = config.num_observations
+                    self.num_parameters = config.num_parameters
+                    self.num_iterations = config.num_iterations
+                    self.expected_count = config.num_realizations
+                    self._num_fm_steps = config.num_fm_steps
         except URLError:
-            pass
+            logger.exception("Failed to fetch experiment config")
 
     async def action_quit(self) -> None:
         """Handle the quit action and cleanup threads."""
@@ -365,6 +481,51 @@ class GertMonitorApp(App[None]):
             self._expand_all_nodes()
         else:
             self._collapse_all_nodes()
+
+    def action_toggle_plotter(self) -> None:
+        """Open the plotter overlay for the currently selected scope."""
+        logger.info("action_toggle_plotter triggered in GertMonitorApp")
+
+        # We need an active execution and a selected node
+        if not getattr(self, "execution_id", None):
+            logger.warning("Cannot open plotter: No active execution_id")
+            return
+
+        try:
+            tree = self.screen.query_one("#tree-view", NavigationTree)
+        except (WrongType, NoMatches):
+            logger.exception("Cannot open plotter: Could not find tree-view.")
+            return
+
+        if not tree.cursor_node or not tree.cursor_node.data:
+            logger.warning("Cannot open plotter: No node selected in tree")
+            return
+
+        scope_node = tree.cursor_node.data
+        logger.info(
+            f"Plotter scope node: type={scope_node.node_type}, "
+            f"iter={scope_node.iteration}",
+        )
+
+        # We only plot for iteration level and below
+        if scope_node.node_type not in {"iteration", "update", "realization", "step"}:
+            logger.warning(
+                f"Plotting not supported for node type: {scope_node.node_type}",
+            )
+            return
+
+        logger.info("Pushing PlotterScreen overlay")
+        try:
+            screen = PlotterScreen(
+                api_url=self.api_url,
+                experiment_id=self.experiment_id,
+                execution_id=self.execution_id,
+                scope_node=scope_node,
+            )
+            self.push_screen(screen)
+            logger.info("PlotterScreen pushed successfully")
+        except Exception:
+            logger.exception("Failed to open plotter.")
 
     def _expand_all_nodes(self) -> None:
         for node in self._iteration_nodes.values():
@@ -426,109 +587,200 @@ class GertMonitorApp(App[None]):
         )
 
     def _check_if_all_realizations_are_done(self) -> bool:
-        """Poll the status API. Returns True if all expected realizations are done."""
-        try:
-            req = urllib.request.Request(self.status_url)  # noqa: S310
-            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
-                if response.getcode() == 200:
-                    data = json.loads(response.read().decode("utf-8"))
-                    parsed_data = [
-                        RealizationState.model_validate(item) for item in data
-                    ]
-                    self.call_from_thread(self.process_data, parsed_data)
+        """Poll status API and return True if execution or realizations are finished."""
+        if not self.status_url:
+            logger.warning("status_url is empty!")
+            return False
 
-                    if (
-                        self.expected_count is not None
-                        and self.expected_count > 0
-                        and self.num_iterations > 0
-                    ):
-                        total_expected = self.expected_count * self.num_iterations
-                        if len(self._statuses) >= total_expected and all(
-                            s.status in {"COMPLETED", "FAILED"}
-                            for s in self._statuses.values()
-                        ):
-                            return True
-        except URLError:
-            pass
+        # 1. Check if the overall execution is in a terminal state
+        is_terminal = self._is_execution_terminal()
+
+        # 2. Update local state with latest realization data
+        realizations_updated = self._fetch_and_update_realizations()
+
+        # 3. Decision logic
+        if is_terminal:
+            return True
+
+        if realizations_updated:
+            return self._all_realizations_completed()
+
         return False
+
+    def _is_execution_terminal(self) -> bool:
+        """Helper to check the high-level execution status."""
+        state_url = (
+            f"{self.api_url}/experiments/{self.experiment_id}"
+            f"/executions/{self.execution_id}/state"
+        )
+
+        if not state_url.startswith(("http://", "https://")):
+            logger.error(f"Refusing to open URL with unsafe scheme: {state_url}")
+            return False
+
+        terminal_states = {"COMPLETED", "FAILED", "PAUSED", "PAUSING"}
+
+        try:
+            # We use a 5s timeout and context manager for safety
+            with urllib.request.urlopen(state_url, timeout=5) as resp:  # noqa: S310
+                if resp.getcode() == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    status = data.get("status")
+                    if status in terminal_states:
+                        logger.info(f"Execution reached terminal state: {status}")
+                        return True
+        except Exception:
+            logger.exception("Failed to fetch execution state.")
+
+        return False
+
+    def _fetch_and_update_realizations(self) -> bool:
+        """Fetches realization data and pushes it to the UI/Thread."""
+        if not self.status_url:
+            logger.warning("status_url is empty!")
+            return False
+
+        try:
+            # httpx handles the connection pooling and context management internally
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(self.status_url)
+
+                # Check for 2xx status codes
+                if response.status_code == 200:
+                    # response.json() automatically handles decoding and parsing
+                    data = response.json()
+
+                    parsed = [RealizationState.model_validate(item) for item in data]
+
+                    self.call_from_thread(self.process_data, parsed)
+                    return True
+                logger.warning(f"Failed to fetch status: HTTP {response.status_code}")
+
+        except httpx.RequestError as exc:
+            # Catches connection issues, timeouts, etc.
+            logger.exception(f"Network error while requesting {exc.request.url!r}")
+        except Exception:
+            # Catches parsing errors (e.g., invalid JSON or Pydantic validation)
+            logger.exception("Unexpected error updating realizations")
+
+        return False
+
+    def _all_realizations_completed(self) -> bool:
+        """Calculates if the count and status
+        of realizations meet completion criteria."""
+        if not (self.expected_count and self.num_iterations):
+            return False
+
+        total_expected = self.expected_count * self.num_iterations
+        done_states = {"COMPLETED", "FAILED"}
+
+        reached_count = len(self._statuses) >= total_expected
+        all_finished = all(s.status in done_states for s in self._statuses.values())
+
+        return reached_count and all_finished
 
     def _poll_responses(self) -> None:
         """Poll the responses API for all discovered iterations."""
         # Poll for each iteration we know about.
-        iterations = {it for it, _ in self._statuses}
-        for it in sorted(iterations):
-            url = (
+        iterations = sorted({it for it, _ in self._statuses})
+        if not iterations:
+            logger.info("No iterations discovered to poll responses for.")
+            return
+
+        for it in iterations:
+            self._poll_iteration_responses(it)
+            self._poll_extra_iteration_info(it)
+
+    def _poll_extra_iteration_info(self, it: int) -> None:
+        """Poll for observation summary and update metadata for an iteration."""
+        # Poll for observation summary
+        summary_url = (
+            f"{self.api_url}/experiments/{self.experiment_id}"
+            f"/executions/{self.execution_id}/ensembles/{it}/observation_summary"
+        )
+        try:
+            summary_req = urllib.request.Request(summary_url)  # noqa: S310
+            with urllib.request.urlopen(summary_req, timeout=5) as summary_resp:  # noqa: S310
+                if summary_resp.getcode() == 200:
+                    summary_data = json.loads(summary_resp.read().decode("utf-8"))
+                    if summary_data is not None:
+                        parsed_summary = ObservationSummary.model_validate(
+                            summary_data,
+                        )
+                        self.call_from_thread(
+                            self.process_observation_summary,
+                            it,
+                            parsed_summary,
+                        )
+        except URLError:
+            pass
+
+        # Poll for update metadata if iteration > 0
+        if it > 0:
+            meta_url = (
                 f"{self.api_url}/experiments/{self.experiment_id}"
-                f"/executions/{self.execution_id}/ensembles/{it}/responses"
+                f"/executions/{self.execution_id}/ensembles/{it}/update/metadata"
             )
             try:
-                req = urllib.request.Request(url)  # noqa: S310
-                with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
-                    if response.getcode() == 200:
-                        data = json.loads(response.read().decode("utf-8"))
+                meta_req = urllib.request.Request(meta_url)  # noqa: S310
+                with urllib.request.urlopen(meta_req, timeout=5) as meta_resp:  # noqa: S310
+                    if meta_resp.getcode() == 200:
+                        meta_data = json.loads(meta_resp.read().decode("utf-8"))
+                        parsed_meta = UpdateMetadata.model_validate(meta_data)
+                        self.call_from_thread(
+                            self.process_update_metadata,
+                            it,
+                            parsed_meta,
+                        )
+            except URLError:
+                pass
+
+    def _poll_iteration_responses(self, it: int) -> None:
+        url = (
+            f"{self.api_url}/experiments/{self.experiment_id}"
+            f"/executions/{self.execution_id}/ensembles/{it}/responses"
+        )
+        try:
+            req = urllib.request.Request(url)  # noqa: S310
+            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
+                if response.getcode() == 200:
+                    data_bytes = response.read()
+                    if data_bytes:
+                        df = pl.read_parquet(io.BytesIO(data_bytes))
+                        data = df.to_dicts()
                         parsed_data = [
                             ResponseItem.model_validate(item) for item in data
                         ]
                         self.call_from_thread(self.process_responses, it, parsed_data)
-            except URLError:
-                pass
-
-            # Poll for observation summary
-            summary_url = (
-                f"{self.api_url}/experiments/{self.experiment_id}"
-                f"/executions/{self.execution_id}/ensembles/{it}/observation_summary"
-            )
-            try:
-                summary_req = urllib.request.Request(summary_url)  # noqa: S310
-                with urllib.request.urlopen(summary_req, timeout=5) as summary_resp:  # noqa: S310
-                    if summary_resp.getcode() == 200:
-                        summary_data = json.loads(summary_resp.read().decode("utf-8"))
-                        if summary_data is not None:
-                            parsed_summary = ObservationSummary.model_validate(
-                                summary_data,
-                            )
-                            self.call_from_thread(
-                                self.process_observation_summary,
-                                it,
-                                parsed_summary,
-                            )
-            except URLError:
-                pass
-
-            # Poll for update metadata if iteration > 0
-            if it > 0:
-                meta_url = (
-                    f"{self.api_url}/experiments/{self.experiment_id}"
-                    f"/executions/{self.execution_id}/ensembles/{it}/update/metadata"
-                )
-                try:
-                    meta_req = urllib.request.Request(meta_url)  # noqa: S310
-                    with urllib.request.urlopen(meta_req, timeout=5) as meta_resp:  # noqa: S310
-                        if meta_resp.getcode() == 200:
-                            meta_data = json.loads(meta_resp.read().decode("utf-8"))
-                            parsed_meta = UpdateMetadata.model_validate(meta_data)
-                            self.call_from_thread(
-                                self.process_update_metadata,
-                                it,
-                                parsed_meta,
-                            )
-                except URLError:
-                    pass
+        except URLError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to poll responses: {e}")
 
     @work(exclusive=True, thread=True)
     def poll_api(self) -> None:
         """Poll the API for status updates in a background thread."""
+        counter = 0
+
+        done_cycles = 0
         while not self._exiting:
-            should_exit = self._check_if_all_realizations_are_done()
+            logger.info(f"Polling API... counter={counter}")
+            is_done = self._check_if_all_realizations_are_done()
+            logger.info(f"is_done={is_done}")
+
             self._poll_responses()
 
-            if should_exit:
-                time.sleep(1)
-                self._exiting = True
-                self.call_from_thread(self.exit)
-                break
+            counter += 1
 
-            time.sleep(0.5)
+            if is_done:
+                done_cycles += 1
+                # Wait a few cycles to ensure we pick
+                # up the final asynchronously written .parquet files
+                if done_cycles > 3:
+                    logger.info("Experiment done, exiting poll loop.")
+                    break
+
+            time.sleep(1.0)
 
     def process_data(self, parsed_data: list[RealizationState]) -> None:
         """Process API data and update UI components on the main thread."""
@@ -542,7 +794,10 @@ class GertMonitorApp(App[None]):
             )
 
         iter_counts = self._init_iter_counts(parsed_data)
-        tree = self.query_one("#tree-view", NavigationTree)
+        try:
+            tree = self.screen.query_one("#tree-view", NavigationTree)
+        except Exception:  # noqa: BLE001
+            return
 
         # First pass: update all realizations and aggregate counts
         for item in parsed_data:
@@ -570,7 +825,10 @@ class GertMonitorApp(App[None]):
             self._update_realization_node(tree, it, r_id, st, steps)
 
         self._update_iteration_labels(tree, iter_counts)
-        summary = self.query_one(StateSummary)
+        try:
+            summary = self.screen.query_one(StateSummary)
+        except Exception:  # noqa: BLE001
+            return
         summary.update_summary(state_counts)
         self._update_progress_bars(iter_counts)
 
@@ -624,7 +882,7 @@ class GertMonitorApp(App[None]):
                     expand=True,
                     data=NodeData(node_type="iteration", iteration=it),
                 )
-            else:
+            elif self._iteration_nodes[it].label != label:
                 self._iteration_nodes[it].set_label(label)
 
     def _update_realization_node(
@@ -676,7 +934,7 @@ class GertMonitorApp(App[None]):
                 ),
                 expand=False,
             )
-        else:
+        elif self._realization_nodes[it, r_id].label != label:
             self._realization_nodes[it, r_id].set_label(label)
 
         real_node = self._realization_nodes[it, r_id]
@@ -728,11 +986,14 @@ class GertMonitorApp(App[None]):
                     log_type="stderr",
                 ),
             )
-        else:
+        elif self._step_nodes[it, r_id, step_name].label != step_label:
             self._step_nodes[it, r_id, step_name].set_label(step_label)
 
     def _update_progress_bars(self, iter_counts: dict[int, IterationCount]) -> None:
-        progress_view = self.query_one(ProgressView)
+        try:
+            progress_view = self.screen.query_one(ProgressView)
+        except Exception:  # noqa: BLE001
+            return
 
         # Aggregate totals across all iterations
         total_done = sum(c.done for c in iter_counts.values())
@@ -857,7 +1118,10 @@ class GertMonitorApp(App[None]):
     def _update_response_viewer(self) -> None:
         """Update the response viewer for the selected realization or step."""
         item = self._selected_item
-        viewer = self.query_one("#response-view", ResponseViewer)
+        try:
+            viewer = self.screen.query_one("#response-view", ResponseViewer)
+        except Exception:  # noqa: BLE001
+            return
         if item is None:
             self._show_experiment_details(viewer)
             return
@@ -1208,6 +1472,11 @@ def start_monitor(
     execution_id: str | None = None,
 ) -> None:
     """Entry point for the monitor CLI command."""
+
+    logger.info(
+        f"Starting monitor for API={api_url} Exp={experiment_id} Exec={execution_id}",
+    )
+
     app = GertMonitorApp(
         api_url,
         experiment_id,
@@ -1216,5 +1485,5 @@ def start_monitor(
     try:
         app.run()
     except Exception:
-        traceback.print_exc()
+        logger.exception("Exception during monitor run.")
         raise
