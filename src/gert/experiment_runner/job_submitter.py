@@ -76,8 +76,8 @@ class JobSubmitter:
         if job := self._jobs.get(job_id):
             try:
                 self._executor.cancel(job)
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"Failed to cancel job {job_id}: {e}")
+            except Exception:
+                logger.exception(f"Failed to cancel job {job_id}")
 
     def _translate_to_psij_spec(
         self,

@@ -189,7 +189,10 @@ def test_get_responses_missing_files_raises_error(
     storage_path: Path,
 ) -> None:
     """If no response files exist for the iteration, it should raise a clear error."""
-    with pytest.raises(FileNotFoundError, match="Consolidated data for experiment"):
+    with pytest.raises(
+        FileNotFoundError,
+        match="Consolidated responses for experiment",
+    ):
         api.get_responses("missing_exp", "run_0", 0)
 
 

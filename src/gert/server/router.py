@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import traceback
-import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -84,20 +83,23 @@ class FailurePayload(BaseModel):
 
 
 class StateRecoveryError(Exception):
-    """Raised when an execution state cannot be reliably recovered from persistent storage."""
-    pass
+    """Raised when an execution state cannot be reliably recovered."""
+
 
 class ExecutionData:
     """Wrapper holding an execution's config, state, and realtime statuses."""
-    def __init__(self, config: ExperimentConfig):
+
+    def __init__(self, config: ExperimentConfig) -> None:
         self.config = config
         self.statuses: dict[int, dict[int, RealizationStatus]] = defaultdict(dict)
-        self.orchestrator: "ExperimentOrchestrator | None" = None
+        self.orchestrator: ExperimentOrchestrator | None = None
         self.overarching_status: str = "RUNNING"
         self.error: str | None = None
 
+
 class ServerState:
     """Singleton holding in-memory server state."""
+
     _instance: "ServerState | None" = None
 
     @classmethod
@@ -123,19 +125,24 @@ class ServerState:
         self.experiment_run_counts.clear()
         self.latest_execution_id.clear()
 
+
 def _rebuild_state_from_log(
     experiment_id: str,
     execution_id: str,
     config: ExperimentConfig,
 ) -> bool:
-    """Rebuild the execution statuses strictly from the event log."""
+    """Rebuild the execution statuses strictly from the event log.
+
+    Raises:
+        StateRecoveryError: If unable to reconstruct execution status.
+    """
     base = config.storage_base
     events_file = base / experiment_id / execution_id / "status_events.jsonl"
     if not events_file.exists():
         return False
 
     server_state = ServerState.get()
-    
+
     if execution_id not in server_state.executions:
         server_state.executions[execution_id] = ExecutionData(config)
         if execution_id not in server_state.experiment_executions[experiment_id]:
@@ -151,17 +158,17 @@ def _rebuild_state_from_log(
                 if not line.strip():
                     continue
                 event = json.loads(line)
-                
+
                 iteration = event["iteration"]
                 r_id = event["realization_id"]
                 st = event["status"]
-                
+
                 # Check for overarching execution status events (iteration == -1)
                 if iteration == -1 and r_id == -1:
                     exec_data.overarching_status = st
                     exec_data.error = event.get("error")
                     continue
-                
+
                 # Apply to in-memory _experiment_statuses
                 _apply_status_event(
                     execution_id,
@@ -172,7 +179,8 @@ def _rebuild_state_from_log(
                     event.get("timestamp"),
                 )
     except Exception as e:
-        raise StateRecoveryError(f"Failed to parse status_events.jsonl {events_file}: {e}") from e
+        msg = f"Failed to parse status_events.jsonl {events_file}: {e}"
+        raise StateRecoveryError(msg) from e
 
     return True
 
@@ -181,7 +189,11 @@ def _recover_execution(
     experiment_id: str,
     execution_id: str,
 ) -> ExperimentConfig | None:
-    """Recover execution configuration and log from persistent storage if missing."""
+    """Recover execution configuration and log from persistent storage if missing.
+
+    Raises:
+        StateRecoveryError: If unable to reconstruct execution status.
+    """
     server_state = ServerState.get()
 
     if execution_id in server_state.executions:
@@ -198,17 +210,20 @@ def _recover_execution(
         config_file = base / experiment_id / "config.json"
         if config_file.exists():
             try:
-                config = ExperimentConfig.model_validate_json(config_file.read_text(encoding="utf-8"))
+                config = ExperimentConfig.model_validate_json(
+                    config_file.read_text(encoding="utf-8"),
+                )
                 server_state.configs[experiment_id] = config
             except Exception as e:
-                raise StateRecoveryError(f"Failed to load experiment config {config_file}: {e}") from e
+                msg = f"Failed to load experiment config {config_file}: {e}"
+                raise StateRecoveryError(msg) from e
 
     if not config:
         return None
 
     # Rebuild state from event sourcing log
     exists = _rebuild_state_from_log(experiment_id, execution_id, config)
-    
+
     if exists:
         return config
 
@@ -224,9 +239,7 @@ async def list_experiments() -> list[dict[str, str]]:
     """List all registered experiments."""
     # Start with in-memory ones
     server_state = ServerState.get()
-    experiments = [
-        {"id": k, "name": v.name} for k, v in server_state.configs.items()
-    ]
+    experiments = [{"id": k, "name": v.name} for k, v in server_state.configs.items()]
 
     # Add from storage if not already there
     api = StorageAPI(base_storage_path=Path("./permanent_storage"))
@@ -288,7 +301,11 @@ async def pause_execution(
     exec_data = server_state.executions.get(execution_id)
     if exec_data and exec_data.orchestrator:
         exec_data.orchestrator.pause(force=force)
-    elif exec_data and exec_data.overarching_status not in {"PAUSED", "COMPLETED", "FAILED"}:
+    elif exec_data and exec_data.overarching_status not in {
+        "PAUSED",
+        "COMPLETED",
+        "FAILED",
+    }:
         _update_realization_status(execution_id, -1, -1, "PAUSED")
 
     return {"status": "success"}
@@ -327,7 +344,7 @@ async def resume_execution(
     if exec_data and exec_data.overarching_status in {"COMPLETED", "FAILED"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot resume execution '{execution_id}' in state {exec_data.overarching_status}",
+            detail=f"Cannot resume execution in state {exec_data.overarching_status}",
         )
 
     api_url = str(request.base_url).rstrip("/")
@@ -349,9 +366,9 @@ async def resume_execution(
     orchestrator = ExperimentOrchestrator(
         config=config,
         experiment_id=experiment_id,
-        run_count=1,
         monitoring_callback=_monitoring_cb,
         api_url=api_url,
+        execution_id=execution_id,
     )
 
     if not exec_data:
@@ -449,7 +466,11 @@ async def start_experiment(
     experiment_id: str,
     request: Request,
 ) -> dict[str, Any]:
-    """Start an experiment by ID."""
+    """Start an experiment by ID.
+
+    Raises:
+        HTTPException: If the experiment is not found.
+    """
     server_state = ServerState.get()
     if experiment_id not in server_state.configs:
         raise HTTPException(
@@ -490,15 +511,14 @@ async def start_experiment(
         config=config,
         experiment_id=experiment_id,
         monitoring_callback=_monitoring_cb,
-        run_count=server_state.experiment_run_counts[experiment_id],
         api_url=api_url,
     )
 
     execution_id = orchestrator.execution_id
     execution_id_ref["id"] = execution_id
-    
+
     server_state.latest_execution_id[experiment_id] = execution_id
-    
+
     exec_data = ExecutionData(config)
     exec_data.orchestrator = orchestrator
     exec_data.overarching_status = "RUNNING"
@@ -509,11 +529,25 @@ async def start_experiment(
     async def _run_wrapped() -> None:
         try:
             await orchestrator.run_experiment()
-            exec_data.state.status = "COMPLETED"
+
+            if getattr(orchestrator, "is_paused", False):
+                exec_data.overarching_status = "PAUSED"
+                _update_realization_status(execution_id, -1, -1, "PAUSED")
+            else:
+                exec_data.overarching_status = "COMPLETED"
+                _update_realization_status(execution_id, -1, -1, "COMPLETED")
+
         except Exception:
             error_msg = traceback.format_exc()
-            exec_data.state.status = "FAILED"
-            exec_data.state.error = error_msg
+            exec_data.overarching_status = "FAILED"
+            exec_data.error = error_msg
+            _update_realization_status(
+                execution_id,
+                -1,
+                -1,
+                "FAILED",
+                error_msg=error_msg,
+            )
             # Make sure it gets printed on the server side as well
             logger.exception("Background execution failed")
         finally:
@@ -552,8 +586,31 @@ async def list_executions(
         )
 
     config = server_state.configs[experiment_id]
-    api = StorageAPI(base_storage_path=config.storage_base)
-    return api.list_executions(config.name)
+
+    exp_dir = config.storage_base / experiment_id
+    if not exp_dir.exists():
+        return []
+
+    executions = []
+    for exec_dir in exp_dir.iterdir():
+        if not exec_dir.is_dir():
+            continue
+
+        try:
+            state = await get_execution_state(experiment_id, exec_dir.name)
+            executions.append(state)
+        except HTTPException:
+            continue
+
+    executions.sort(
+        key=lambda x: (
+            (exp_dir / x.execution_id / "status_events.jsonl").stat().st_mtime
+            if (exp_dir / x.execution_id / "status_events.jsonl").exists()
+            else 0
+        ),
+        reverse=True,
+    )
+    return executions
 
 
 @router.get(
@@ -576,7 +633,7 @@ async def get_execution_state(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution '{execution_id}' state not found",
         )
-        
+
     server_state = ServerState.get()
     exec_data = server_state.executions.get(execution_id)
     if not exec_data:
@@ -584,13 +641,13 @@ async def get_execution_state(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Execution '{execution_id}' state not found",
         )
-        
-    current_iter = max([k for k in exec_data.statuses.keys() if k != -1], default=0)
+
+    current_iter = max([k for k in exec_data.statuses if k != -1], default=0)
 
     active = []
     completed = []
     failed = []
-    
+
     if current_iter in exec_data.statuses:
         for r_id, status_obj in exec_data.statuses[current_iter].items():
             if r_id == -1:
@@ -601,7 +658,7 @@ async def get_execution_state(
                 active.append(r_id)
             elif status_obj.status == "FAILED":
                 failed.append(r_id)
-                
+
     return ExecutionState(
         experiment_id=experiment_id,
         execution_id=execution_id,
@@ -638,11 +695,11 @@ async def get_latest_experiment_status(
         )
 
     execution_id = server_state.latest_execution_id[experiment_id]
-    
+
     exec_data = server_state.executions.get(execution_id)
     if not exec_data:
         return []
-        
+
     all_statuses: list[RealizationStatus] = []
     for iter_dict in exec_data.statuses.values():
         all_statuses.extend(iter_dict.values())
@@ -784,7 +841,7 @@ def _apply_status_event(
     exec_data = server_state.executions.get(execution_id)
     if not exec_data:
         return
-        
+
     state = exec_data.statuses[iteration].get(realization_id)
     if not state:
         state = RealizationStatus(
@@ -794,7 +851,9 @@ def _apply_status_event(
         )
         exec_data.statuses[iteration][realization_id] = state
 
-    event_time = datetime.fromisoformat(timestamp_iso) if timestamp_iso else datetime.now(tz=UTC)
+    event_time = (
+        datetime.fromisoformat(timestamp_iso) if timestamp_iso else datetime.now(tz=UTC)
+    )
 
     if step_name:
         step = next((s for s in state.steps if s.name == step_name), None)
@@ -816,6 +875,7 @@ def _update_realization_status(
     realization_id: int,
     new_status: str,
     step_name: str | None = None,
+    error_msg: str | None = None,
 ) -> None:
     """Helper to update the in-memory status of a realization and append to disk log."""
     server_state = ServerState.get()
@@ -832,19 +892,25 @@ def _update_realization_status(
         step_name,
         now_iso,
     )
-    
-    # Also apply to the main ExecutionState wrapper logic since _rebuild_state_from_log only does it initially
-    if step_name is None:
-        pass
+
+    # Also apply to the main ExecutionState wrapper logic
+    if iteration == -1 and realization_id == -1:
+        exec_data.overarching_status = new_status
+        if error_msg:
+            exec_data.error = error_msg
 
     # Append to disk log
     experiment_id = exec_data.config.name
-    base = exec_data.config.storage_base if exec_data.config else Path("./permanent_storage")
+    base = (
+        exec_data.config.storage_base
+        if exec_data.config
+        else Path("./permanent_storage")
+    )
     events_file = base / experiment_id / execution_id / "status_events.jsonl"
-    
+
     # Ensure parent directory exists.
     events_file.parent.mkdir(parents=True, exist_ok=True)
-    
+
     event = {
         "timestamp": now_iso,
         "iteration": iteration,
@@ -852,12 +918,13 @@ def _update_realization_status(
         "status": new_status,
         "step_name": step_name,
     }
+    if error_msg:
+        event["error"] = error_msg
     try:
         with events_file.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
     except Exception:
         logger.exception("Failed to write status event to disk")
-
 
 
 @router.post(

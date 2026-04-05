@@ -17,7 +17,6 @@ import psij
 from gert.experiments.models import (
     ExecutableForwardModelStep,
     ExecutableHook,
-    ExecutionState,
     ExperimentConfig,
     ParameterMatrix,
     UpdateMetadata,
@@ -100,10 +99,9 @@ class ExperimentOrchestrator:
         self,
         config: ExperimentConfig,
         experiment_id: str,
-        run_count: int = 1,
+        api_url: str,
+        execution_id: str | None = None,
         monitoring_callback: Callable[[int, int, str, str | None], None] | None = None,
-        api_url: str | None = None,
-        resume_state: ExecutionState | None = None,
     ) -> None:
         """Initialize the orchestrator using an immutable config as the base truth."""
         self._config = config
@@ -111,12 +109,14 @@ class ExperimentOrchestrator:
         self._monitoring_callback = monitoring_callback
         self._api_url = api_url
 
-        if resume_state:
-            self._execution_id = resume_state.execution_id
-            self._current_iteration = resume_state.current_iteration
+        if execution_id:
+            self._execution_id = execution_id
+            # State will be built dynamically via _rebuild_state_from_log
         else:
             exp_uuid = uuid.uuid4().hex
-            self._execution_id = f"run_{run_count}-{exp_uuid}"
+            # Run count logic is not strictly needed inside the orchestrator
+            # if we just want a unique ID. We can just use the uuid.
+            self._execution_id = f"run_1-{exp_uuid}"
             self._current_iteration = 0
 
         # Instantiate internal dependencies based directly on the base truth config
@@ -137,14 +137,6 @@ class ExperimentOrchestrator:
         self._successful_realizations: dict[int, set[int]] = defaultdict(set)
         self._failed_realizations: dict[int, set[int]] = defaultdict(set)
 
-        if resume_state:
-            self._successful_realizations[self._current_iteration] = set(
-                resume_state.completed_realizations,
-            )
-            self._failed_realizations[self._current_iteration] = set(
-                resume_state.failed_realizations,
-            )
-
         # Track individual step outcomes: {iteration: {realization_id: set(step_name)}}
         self._successful_steps: dict[int, dict[int, set[str]]] = defaultdict(
             lambda: defaultdict(set),
@@ -152,6 +144,9 @@ class ExperimentOrchestrator:
         self._failed_steps: dict[int, dict[int, set[str]]] = defaultdict(
             lambda: defaultdict(set),
         )
+
+        if execution_id:
+            self._reconstruct_state_from_log()
         # Track expected number of realizations per iteration
         self._expected_realizations: dict[int, int] = {}
         # Completion event per iteration
@@ -160,6 +155,55 @@ class ExperimentOrchestrator:
         self._pause_requested = False
         self._force_pause = False
         self._pause_event = asyncio.Event()
+
+    def _reconstruct_state_from_log(self) -> None:
+        """Rebuild internal state strictly from status_events.jsonl."""
+        events_file = (
+            self._config.storage_base
+            / self._experiment_id
+            / self._execution_id
+            / "status_events.jsonl"
+        )
+
+        if not events_file.exists():
+            self._current_iteration = 0
+            return
+
+        # 1. Extraction Pass: Load all valid lines into memory
+        events = []
+        try:
+            with events_file.open("r", encoding="utf-8") as f:
+                events = [json.loads(line) for line in f if line.strip()]
+        except Exception:
+            logger.exception(f"Failed to read events from {events_file}")
+            raise
+
+        # 2. Mapping Pass: Process the logic
+        current_iter = 0
+
+        for event in events:
+            it = event["iteration"]
+            r_id = event["realization_id"]
+            status = event["status"]
+            step = event.get("step_name")
+
+            current_iter = max(current_iter, it)
+
+            # Skip global/ensemble level events
+            if r_id == -1:
+                continue
+
+            if step:
+                if status == "COMPLETED":
+                    self._successful_steps[it][r_id].add(step)
+                elif status == "FAILED":
+                    self._failed_steps[it][r_id].add(step)
+            elif status == "COMPLETED":
+                self._successful_realizations[it].add(r_id)
+            elif status == "FAILED":
+                self._failed_realizations[it].add(r_id)
+
+        self._current_iteration = current_iter
 
     def pause(self, *, force: bool = False) -> None:
         """Pause the experiment execution.
@@ -221,8 +265,8 @@ class ExperimentOrchestrator:
                         "COMPLETED",
                         step_name,
                     )
-                except Exception as e:
-                    logger.error(f"Monitoring callback failed: {e}")
+                except Exception:
+                    logger.exception("Monitoring callback failed")
 
         # A realization is complete only if ALL expected steps are successful
         expected_steps = {s.name for s in self._config.forward_model_steps}
@@ -237,9 +281,14 @@ class ExperimentOrchestrator:
             self._successful_realizations[iteration].add(realization_id)
             if self._monitoring_callback:
                 try:
-                    self._monitoring_callback(realization_id, iteration, "COMPLETED", None)
-                except Exception as e:
-                    logger.error(f"Monitoring callback failed: {e}")
+                    self._monitoring_callback(
+                        realization_id,
+                        iteration,
+                        "COMPLETED",
+                        None,
+                    )
+                except Exception:
+                    logger.exception("Monitoring callback failed")
 
         await self._check_iteration_complete(iteration)
 
@@ -264,8 +313,8 @@ class ExperimentOrchestrator:
                         "FAILED",
                         step_name,
                     )
-                except Exception as e:
-                    logger.error(f"Monitoring callback failed: {e}")
+                except Exception:
+                    logger.exception("Monitoring callback failed")
 
         # ANY step failure fails the whole realization
         if realization_id not in self._failed_realizations[iteration]:
@@ -276,8 +325,8 @@ class ExperimentOrchestrator:
             if self._monitoring_callback:
                 try:
                     self._monitoring_callback(realization_id, iteration, "FAILED", None)
-                except Exception as e:
-                    logger.error(f"Monitoring callback failed: {e}")
+                except Exception:
+                    logger.exception("Monitoring callback failed")
 
         await self._check_iteration_complete(iteration)
 
@@ -359,7 +408,7 @@ class ExperimentOrchestrator:
                 i,
                 current_parameters,
             )
-            
+
             # 2. Wait for all realizations in this iteration to finish
             logger.info(f"Waiting for iteration {i} realizations to complete...")
             await self._wait_for_iteration(i)
@@ -498,8 +547,10 @@ class ExperimentOrchestrator:
                 if r_id not in skip_realizations:
                     try:
                         self._monitoring_callback(r_id, iteration, "PENDING", None)
-                    except Exception as e:
-                        logger.error(f"Monitoring callback failed: {e}")
+                    except Exception:
+                        logger.exception(
+                            "Monitoring callback failed",
+                        )
 
         for r_id in sorted(realizations):
             if r_id in skip_realizations:
@@ -583,13 +634,22 @@ class ExperimentOrchestrator:
                     ).resolve()
 
                 cmd_parts = [str(exe_path)]
+                has_api_url_arg = False
                 for arg in step.args:
                     replaced = arg.replace("{experiment_id}", self._experiment_id)
                     replaced = replaced.replace("{execution_id}", self._execution_id)
+                    replaced = replaced.replace("{api_url}", self._api_url)
                     # Use literal string for the placeholder match
                     replaced = replaced.replace("{iteration}", str(iteration))  # noqa: RUF027
                     replaced = replaced.replace("{realization}", str(realization_id))
+                    if "--api-url" in replaced:
+                        has_api_url_arg = True
                     cmd_parts.append(replaced)
+
+                # Safeguard: if it looks like a GERT model but has no api-url, append it
+                if not has_api_url_arg:
+                    cmd_parts.extend(["--api-url", self._api_url])
+
                 execution_steps.append(
                     {"name": step.name, "command": " ".join(cmd_parts)},
                 )
@@ -658,10 +718,15 @@ class ExperimentOrchestrator:
                     psij.JobState.FAILED,
                     psij.JobState.CANCELED,
                 }:
-                    err_msg = getattr(status, 'message', None) or getattr(status, 'exception', 'No message')
+                    err_msg = getattr(status, "message", None) or getattr(
+                        status,
+                        "exception",
+                        "No message",
+                    )
                     logger.error(
-                        f"PSI/J reported {status.state.name} for realization {realization_id}: "
-                        f"{err_msg}"
+                        f"PSI/J reported {status.state.name} "
+                        f"for realization {realization_id}: "
+                        f"{err_msg}",
                     )
                     asyncio.run_coroutine_threadsafe(
                         self.record_realization_fail(iteration, realization_id),
@@ -679,8 +744,8 @@ class ExperimentOrchestrator:
                         status.state.name,
                         None,
                     )
-                except Exception as e:
-                    logger.error(f"Monitoring callback threadsafe failed: {e}")
+                except Exception:
+                    logger.exception("Monitoring callback threadsafe failed")
 
         return _status_cb
 

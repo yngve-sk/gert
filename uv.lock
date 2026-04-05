@@ -277,6 +277,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "graphite-maps" },
+    { name = "httpx" },
     { name = "networkx" },
     { name = "numpy" },
     { name = "pluggy" },
@@ -293,7 +294,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "hypothesis" },
     { name = "mypy" },
     { name = "pre-commit" },
@@ -314,7 +314,7 @@ types = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.100" },
     { name = "graphite-maps" },
-    { name = "httpx", marker = "extra == 'dev'" },
+    { name = "httpx" },
     { name = "hypothesis", marker = "extra == 'dev'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.19.1" },
     { name = "mypy", marker = "extra == 'types'" },

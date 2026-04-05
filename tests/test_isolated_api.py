@@ -1,18 +1,20 @@
-import json
 import logging
+import operator
 import time
-from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from gert.server.gert_server import gert_server_app
+from gert.server.router import ServerState
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def test_deterministic_api():
+
+def test_deterministic_api() -> None:
     client = TestClient(gert_server_app)
-    
+
     config_data = {
         "name": "deterministic-test",
         "base_working_directory": ".",
@@ -21,7 +23,7 @@ def test_deterministic_api():
                 "name": "dummy_step",
                 "executable": "/bin/echo",
                 "args": ["hello"],
-            }
+            },
         ],
         "queue_config": {
             "backend": "local",
@@ -29,16 +31,17 @@ def test_deterministic_api():
         "parameter_matrix": {
             "metadata": {},
             "values": {
-                "PARAM": {0: 1.0, 1: 2.0}
+                "PARAM": {0: 1.0, 1: 2.0},
             },
-            "datasets": []
+            "datasets": [],
         },
-        "observations": []
+        "observations": [],
     }
 
-    from unittest.mock import patch
-    
-    with patch("gert.experiment_runner.job_submitter.JobSubmitter.submit", return_value="mock_job_id"):
+    with patch(
+        "gert.experiment_runner.job_submitter.JobSubmitter.submit",
+        return_value="mock_job_id",
+    ):
         logger.info("Registering experiment...")
         resp = client.post("/experiments", json=config_data)
         assert resp.status_code == 201
@@ -71,9 +74,11 @@ def test_deterministic_api():
         client.post(
             f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=COMPLETED",
         )
-        
+
         logger.info("Fetching status...")
-        resp = client.get(f"/experiments/{experiment_id}/executions/{execution_id}/status")
+        resp = client.get(
+            f"/experiments/{experiment_id}/executions/{execution_id}/status",
+        )
         assert resp.status_code == 200
         statuses = resp.json()
         logger.info(f"Number of statuses: {len(statuses)}")
@@ -81,41 +86,44 @@ def test_deterministic_api():
         logger.info(f"Sample status: {statuses[0]}")
 
         logger.info("Simulating server restart (clearing in-memory state)...")
-        from gert.server.router import ServerState
-        
+
         server_state = ServerState.get()
-        
+
         # Stop orchestrator
         if execution_id in server_state.executions:
             exec_data = server_state.executions[execution_id]
             if exec_data.orchestrator:
                 exec_data.orchestrator.pause(force=True)
-            
+
         # Give it a moment to cancel
         time.sleep(0.5)
 
         server_state.clear()
 
         logger.info("Fetching statuses after restart...")
-        resp = client.get(f"/experiments/{experiment_id}/executions/{execution_id}/status")
+        resp = client.get(
+            f"/experiments/{experiment_id}/executions/{execution_id}/status",
+        )
         assert resp.status_code == 200
         recovered_statuses = resp.json()
         logger.info(f"Number of recovered statuses: {len(recovered_statuses)}")
-        assert len(recovered_statuses) == len(statuses), f"Mismatch! Original: {statuses}, Recovered: {recovered_statuses}"
-        
-        # Sort for deterministic comparison
-        statuses.sort(key=lambda x: (x["iteration"], x["realization_id"]))
-        recovered_statuses.sort(key=lambda x: (x["iteration"], x["realization_id"]))
-        
+        assert len(recovered_statuses) == len(statuses), (
+            f"Mismatch! Original: {statuses}, Recovered: {recovered_statuses}"
+        )
+
+        # Sort for deterministic comparison using operator.itemgetter
+        sort_key = operator.itemgetter("iteration", "realization_id")
+        statuses.sort(key=sort_key)
+        recovered_statuses.sort(key=sort_key)
+
         logger.info(f"Original status 0: {statuses[0]}")
         logger.info(f"Recovered status 0: {recovered_statuses[0]}")
-        
+
         assert statuses[0]["status"] == recovered_statuses[0]["status"]
         assert len(statuses[0]["steps"]) == len(recovered_statuses[0]["steps"])
-        assert statuses[0]["steps"][0]["status"] == recovered_statuses[0]["steps"][0]["status"]
-        
+        assert (
+            statuses[0]["steps"][0]["status"]
+            == recovered_statuses[0]["steps"][0]["status"]
+        )
+
         logger.info("Deterministic recovery successful!")
-
-if __name__ == "__main__":
-    test_deterministic_api()
-
