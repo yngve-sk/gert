@@ -25,7 +25,7 @@ GERT defines two primary, configurable paths for managing experiment I/O:
 *   **`storage_base` (Base for Persistent Storage):**    *   **Purpose:** The top-level directory for storing all persistent artifacts generated during an experiment, such as consolidated responses, logs, state files, and other critical outputs.
     *   **Structure:** Persistent artifacts for a specific run are located at:
         `<storage_base>/<experiment_id>/<execution_id>/`
-    *   **Behavior:** This directory contains the final, valuable results of the experiment and must be preserved. Data within this path (including `execution_state.json` and the append-only `status_events.jsonl` log) is the absolute source of truth for deterministically recovering and resuming a failed or interrupted execution. Defaults to `./permanent_storage`.
+    *   **Behavior:** This directory contains the final, valuable results of the experiment and must be preserved. Data within this path (including the append-only `status_events.jsonl` log) is the absolute source of truth for deterministically recovering and resuming a failed or interrupted execution. The overall execution state is computed dynamically from this event log. Defaults to `./permanent_storage`.
 
 This explicit and nested approach ensures that the I/O for every execution is entirely predictable and isolated, deriving its configuration from a single, immutable source file.
 
