@@ -6,16 +6,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gert.experiments.models import (
-    ExecutionState,
     ExperimentConfig,
     ParameterMatrix,
     QueueConfig,
 )
 from gert.server.gert_server import create_gert_server
 from gert.server.router import (
+    ExecutionData,
     RealizationStatus,
     ServerState,
-    ExecutionData,
 )
 
 
@@ -36,7 +35,7 @@ def test_monitoring_api_get_status(test_client: TestClient) -> None:
 
     config = ExperimentConfig(
         name="test_exp",
-        base_working_directory=".",
+        base_working_directory=Path.cwd(),
         forward_model_steps=[],
         queue_config=QueueConfig(backend="local"),
         parameter_matrix=ParameterMatrix(metadata={}, values={}, datasets=[]),
@@ -55,7 +54,9 @@ def test_monitoring_api_get_status(test_client: TestClient) -> None:
     server_state.executions[execution_id] = exec_data
     server_state.experiment_executions["test_exp"].append(execution_id)
     server_state.latest_execution_id["test_exp"] = execution_id
-    response = test_client.get(f"/experiments/test_exp/executions/{execution_id}/status")
+    response = test_client.get(
+        f"/experiments/test_exp/executions/{execution_id}/status",
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1

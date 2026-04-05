@@ -2,24 +2,56 @@
 
 import io
 import json
+import logging
+import pathlib
 import time
-import traceback
 import urllib.request
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.error import URLError
 
+import httpx
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.css.query import NoMatches, WrongType
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Label, ProgressBar, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from gert.experiments.models import ExperimentConfig, ObservationSummary, UpdateMetadata
+from gert.plotter import PlotterScreen
+
+
+def _get_monitor_logger() -> logging.Logger:
+    """Configure and return a dedicated logger for the TUI monitor."""
+    pathlib.Path("logs").mkdir(exist_ok=True, parents=True)
+    logger = logging.getLogger("gert.monitor")
+
+    # Only configure if no handlers are present
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+
+        # Dedicated monitor log
+        fh = logging.FileHandler("logs/tui_monitor.log", mode="a")
+        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(fh)
+
+        # Combined log
+        ch = logging.FileHandler("logs/combined.log", mode="a")
+        ch.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s"),
+        )
+        logger.addHandler(ch)
+
+    return logger
+
+
+logger = _get_monitor_logger()
 
 
 class StepState(BaseModel):
@@ -205,8 +237,10 @@ class MonitorDashboardScreen(Screen[None]):
         self.dismiss()
 
     def action_toggle_plotter(self) -> None:
-        # This will need to be updated to use self.app.push_screen
-        pass
+        """Forward plot toggle to the main app."""
+        logger.info("Toggle plotter invoked from MonitorDashboardScreen")
+        if hasattr(self.app, "action_toggle_plotter"):
+            self.app.action_toggle_plotter()
 
 
 class NodeData(BaseModel):
@@ -347,18 +381,18 @@ class GertMonitorApp(App[None]):
         self._reset_state()
 
     def _reset_state(self) -> None:
-        self._statuses = {}
-        self._responses = {}
-        self._iteration_nodes = {}
-        self._update_nodes = {}
-        self._update_metadata_cache = {}
-        self._observation_summaries = {}
-        self._realization_nodes = {}
-        self._step_nodes = {}
-        self._iteration_bar_widgets = {}
-        self._exiting = False
-        self._selected_item = None
-        self._total_steps_in_config = None
+        self._statuses: dict[tuple[int, int], RealizationState] = {}
+        self._responses: dict[int, dict[int, list[ResponseItem]]] = {}
+        self._iteration_nodes: dict[int, TreeNode[NodeData | None]] = {}
+        self._update_nodes: dict[int, TreeNode[NodeData | None]] = {}
+        self._update_metadata_cache: dict[int, UpdateMetadata] = {}
+        self._observation_summaries: dict[int, ObservationSummary] = {}
+        self._realization_nodes: dict[tuple[int, int], TreeNode[NodeData | None]] = {}
+        self._step_nodes: dict[tuple[int, int, str], TreeNode[NodeData | None]] = {}
+        self._iteration_bar_widgets: dict[int, tuple[ProgressBar, Label]] = {}
+        self._exiting: bool = False
+        self._selected_item: NodeData | None = None
+        self._total_steps_in_config: int | None = None
 
         if self.execution_id:
             self.status_url = (
@@ -428,12 +462,7 @@ class GertMonitorApp(App[None]):
                     self.expected_count = config.num_realizations
                     self._num_fm_steps = config.num_fm_steps
         except URLError:
-            pass
-        except Exception as e:  # noqa: BLE001
-            # If config fails to parse, fallback to defaults so we can still display data
-            self.num_iterations = 1
-            self.expected_count = 0
-            self._num_fm_steps = 0
+            logger.exception("Failed to fetch experiment config")
 
     async def action_quit(self) -> None:
         """Handle the quit action and cleanup threads."""
@@ -452,6 +481,51 @@ class GertMonitorApp(App[None]):
             self._expand_all_nodes()
         else:
             self._collapse_all_nodes()
+
+    def action_toggle_plotter(self) -> None:
+        """Open the plotter overlay for the currently selected scope."""
+        logger.info("action_toggle_plotter triggered in GertMonitorApp")
+
+        # We need an active execution and a selected node
+        if not getattr(self, "execution_id", None):
+            logger.warning("Cannot open plotter: No active execution_id")
+            return
+
+        try:
+            tree = self.screen.query_one("#tree-view", NavigationTree)
+        except (WrongType, NoMatches):
+            logger.exception("Cannot open plotter: Could not find tree-view.")
+            return
+
+        if not tree.cursor_node or not tree.cursor_node.data:
+            logger.warning("Cannot open plotter: No node selected in tree")
+            return
+
+        scope_node = tree.cursor_node.data
+        logger.info(
+            f"Plotter scope node: type={scope_node.node_type}, "
+            f"iter={scope_node.iteration}",
+        )
+
+        # We only plot for iteration level and below
+        if scope_node.node_type not in {"iteration", "update", "realization", "step"}:
+            logger.warning(
+                f"Plotting not supported for node type: {scope_node.node_type}",
+            )
+            return
+
+        logger.info("Pushing PlotterScreen overlay")
+        try:
+            screen = PlotterScreen(
+                api_url=self.api_url,
+                experiment_id=self.experiment_id,
+                execution_id=self.execution_id,
+                scope_node=scope_node,
+            )
+            self.push_screen(screen)
+            logger.info("PlotterScreen pushed successfully")
+        except Exception:
+            logger.exception("Failed to open plotter.")
 
     def _expand_all_nodes(self) -> None:
         for node in self._iteration_nodes.values():
@@ -512,67 +586,100 @@ class GertMonitorApp(App[None]):
             f"{emoji} {st} | 🕒 {start} -> {end}"
         )
 
-    def _check_if_all_realizations_are_done(self, logger) -> bool:
-        """Poll the status API. Returns True if all expected realizations are done, or if the execution itself is done/failed."""
+    def _check_if_all_realizations_are_done(self) -> bool:
+        """Poll status API and return True if execution or realizations are finished."""
         if not self.status_url:
             logger.warning("status_url is empty!")
             return False
 
-        terminal_execution = False
+        # 1. Check if the overall execution is in a terminal state
+        is_terminal = self._is_execution_terminal()
+
+        # 2. Update local state with latest realization data
+        realizations_updated = self._fetch_and_update_realizations()
+
+        # 3. Decision logic
+        if is_terminal:
+            return True
+
+        if realizations_updated:
+            return self._all_realizations_completed()
+
+        return False
+
+    def _is_execution_terminal(self) -> bool:
+        """Helper to check the high-level execution status."""
         state_url = (
             f"{self.api_url}/experiments/{self.experiment_id}"
             f"/executions/{self.execution_id}/state"
         )
-        try:
-            req_state = urllib.request.Request(state_url)  # noqa: S310
-            with urllib.request.urlopen(req_state, timeout=5) as response_state:  # noqa: S310
-                if response_state.getcode() == 200:
-                    state_data = json.loads(response_state.read().decode("utf-8"))
-                    exec_status = state_data.get("status")
-                    if exec_status in {"COMPLETED", "FAILED", "PAUSED", "PAUSING"}:
-                        logger.info(f"Execution reached terminal state: {exec_status}")
-                        terminal_execution = True
-        except URLError as e:
-            logger.warning(f"URLError fetching execution state: {e}")
-        except Exception as e:
-            logger.warning(f"Exception fetching execution state: {e}")
-        
-        # Always update realizations for UI, even if terminal, to show the final state
-        logger.info(f"Requesting status from {self.status_url}")
-        try:
-            req = urllib.request.Request(self.status_url)  # noqa: S310
-            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
-                logger.info(f"Got response code {response.getcode()}")
-                if response.getcode() == 200:
-                    data = json.loads(response.read().decode("utf-8"))
-                    logger.info(f"Received {len(data)} realization states")
-                    parsed_data = [
-                        RealizationState.model_validate(item) for item in data
-                    ]
-                    self.call_from_thread(self.process_data, parsed_data)
 
-                    if terminal_execution:
+        if not state_url.startswith(("http://", "https://")):
+            logger.error(f"Refusing to open URL with unsafe scheme: {state_url}")
+            return False
+
+        terminal_states = {"COMPLETED", "FAILED", "PAUSED", "PAUSING"}
+
+        try:
+            # We use a 5s timeout and context manager for safety
+            with urllib.request.urlopen(state_url, timeout=5) as resp:  # noqa: S310
+                if resp.getcode() == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    status = data.get("status")
+                    if status in terminal_states:
+                        logger.info(f"Execution reached terminal state: {status}")
                         return True
+        except Exception:
+            logger.exception("Failed to fetch execution state.")
 
-                    if (
-                        self.expected_count is not None
-                        and self.expected_count > 0
-                        and self.num_iterations > 0
-                    ):
-                        total_expected = self.expected_count * self.num_iterations
-                        if len(self._statuses) >= total_expected and all(
-                            s.status in {"COMPLETED", "FAILED"}
-                            for s in self._statuses.values()
-                        ):
-                            return True
-        except URLError as e:
-            logger.error(f"URLError fetching status: {e}")
-        except Exception as e:
-            logger.error(f"Exception fetching status: {e}", exc_info=True)
-            
-        return terminal_execution
+        return False
 
-    def _poll_responses(self, logger) -> None:
+    def _fetch_and_update_realizations(self) -> bool:
+        """Fetches realization data and pushes it to the UI/Thread."""
+        if not self.status_url:
+            logger.warning("status_url is empty!")
+            return False
+
+        try:
+            # httpx handles the connection pooling and context management internally
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(self.status_url)
+
+                # Check for 2xx status codes
+                if response.status_code == 200:
+                    # response.json() automatically handles decoding and parsing
+                    data = response.json()
+
+                    parsed = [RealizationState.model_validate(item) for item in data]
+
+                    self.call_from_thread(self.process_data, parsed)
+                    return True
+                logger.warning(f"Failed to fetch status: HTTP {response.status_code}")
+
+        except httpx.RequestError as exc:
+            # Catches connection issues, timeouts, etc.
+            logger.exception(f"Network error while requesting {exc.request.url!r}")
+        except Exception:
+            # Catches parsing errors (e.g., invalid JSON or Pydantic validation)
+            logger.exception("Unexpected error updating realizations")
+
+        return False
+
+    def _all_realizations_completed(self) -> bool:
+        """Calculates if the count and status
+        of realizations meet completion criteria."""
+        if not (self.expected_count and self.num_iterations):
+            return False
+
+        total_expected = self.expected_count * self.num_iterations
+        done_states = {"COMPLETED", "FAILED"}
+
+        reached_count = len(self._statuses) >= total_expected
+        all_finished = all(s.status in done_states for s in self._statuses.values())
+
+        return reached_count and all_finished
+
+    def _poll_responses(self) -> None:
         """Poll the responses API for all discovered iterations."""
         # Poll for each iteration we know about.
         iterations = sorted({it for it, _ in self._statuses})
@@ -581,10 +688,10 @@ class GertMonitorApp(App[None]):
             return
 
         for it in iterations:
-            self._poll_iteration_responses(it, logger)
-            self._poll_extra_iteration_info(it, logger)
+            self._poll_iteration_responses(it)
+            self._poll_extra_iteration_info(it)
 
-    def _poll_extra_iteration_info(self, it: int, logger) -> None:
+    def _poll_extra_iteration_info(self, it: int) -> None:
         """Poll for observation summary and update metadata for an iteration."""
         # Poll for observation summary
         summary_url = (
@@ -627,8 +734,8 @@ class GertMonitorApp(App[None]):
                         )
             except URLError:
                 pass
-        
-    def _poll_iteration_responses(self, it: int, logger) -> None:
+
+    def _poll_iteration_responses(self, it: int) -> None:
         url = (
             f"{self.api_url}/experiments/{self.experiment_id}"
             f"/executions/{self.execution_id}/ensembles/{it}/responses"
@@ -649,26 +756,26 @@ class GertMonitorApp(App[None]):
             pass
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to poll responses: {e}")
+
     @work(exclusive=True, thread=True)
     def poll_api(self) -> None:
         """Poll the API for status updates in a background thread."""
         counter = 0
-        import logging
-        logger = logging.getLogger("GertMonitor")
-        
+
         done_cycles = 0
         while not self._exiting:
             logger.info(f"Polling API... counter={counter}")
-            is_done = self._check_if_all_realizations_are_done(logger)
+            is_done = self._check_if_all_realizations_are_done()
             logger.info(f"is_done={is_done}")
 
-            self._poll_responses(logger)
+            self._poll_responses()
 
             counter += 1
 
             if is_done:
                 done_cycles += 1
-                # Wait a few cycles to ensure we pick up the final asynchronously written .parquet files
+                # Wait a few cycles to ensure we pick
+                # up the final asynchronously written .parquet files
                 if done_cycles > 3:
                     logger.info("Experiment done, exiting poll loop.")
                     break
@@ -1365,13 +1472,10 @@ def start_monitor(
     execution_id: str | None = None,
 ) -> None:
     """Entry point for the monitor CLI command."""
-    import logging
-    logging.basicConfig(
-        filename="monitor_debug.log",
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(message)s"
+
+    logger.info(
+        f"Starting monitor for API={api_url} Exp={experiment_id} Exec={execution_id}",
     )
-    logging.info(f"Starting monitor for API={api_url} Exp={experiment_id} Exec={execution_id}")
 
     app = GertMonitorApp(
         api_url,
@@ -1380,8 +1484,6 @@ def start_monitor(
     )
     try:
         app.run()
-    except Exception as e:
-        import sys
-        print(f"Exception during monitor run: {e}", file=sys.stderr)
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Exception during monitor run.")
         raise

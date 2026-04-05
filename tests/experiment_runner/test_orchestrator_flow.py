@@ -62,6 +62,7 @@ async def test_run_experiment_loop_flow(
     orchestrator = ExperimentOrchestrator(
         config=real_config,
         experiment_id="test-exp",
+        api_url="",
     )
 
     # Mock plugin discovery
@@ -147,6 +148,7 @@ async def test_run_experiment_no_updates(
     orchestrator = ExperimentOrchestrator(
         config=real_config,
         experiment_id="test-exp",
+        api_url="",
     )
 
     mock_submitter = MagicMock()

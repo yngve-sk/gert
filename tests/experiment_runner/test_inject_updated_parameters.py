@@ -45,7 +45,11 @@ def test_inject_parameters_overwrites_with_updated_dataframe(tmp_path: Path) -> 
         ),
     )
 
-    orchestrator = ExperimentOrchestrator(config=config, experiment_id="test-exp")
+    orchestrator = ExperimentOrchestrator(
+        config=config,
+        experiment_id="test-exp",
+        api_url="",
+    )
 
     # The updated parameters dataframe (what perform_update returns and replace_values_from_df sets)
     updated_df = pl.DataFrame(

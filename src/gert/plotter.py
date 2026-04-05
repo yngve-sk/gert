@@ -127,6 +127,10 @@ class PlotterScreen(ModalScreen[None]):
 
     def on_mount(self) -> None:
         """Fetch data when the screen mounts."""
+        self.log.info(
+            f"PlotterScreen mounted for {self.scope_node.node_type} "
+            f"(iter={self.scope_node.iteration})",
+        )
         self.query_one("#main-plot").display = False
         self.fetch_data()
         self.set_interval(1.0, self.poll_manifest)
@@ -340,6 +344,11 @@ class PlotterScreen(ModalScreen[None]):
 
         self._prepare_plot()
 
+    async def action_dismiss(self, result: None = None) -> None:
+        """Close the plotter screen."""
+        self.log.info("PlotterScreen dismiss requested")
+        self.dismiss(result)
+
     def action_cycle_x_axis(self) -> None:
         """Cycle through available X-axes."""
         if not self.x_axes or len(self.x_axes) <= 1:
@@ -503,7 +512,7 @@ class PlotterScreen(ModalScreen[None]):
                     pw.scatter(
                         bucket_df.get_column("i").to_list(),
                         bucket_df.get_column("j").to_list(),
-                        marker="■",
+                        marker=".",
                         marker_style=colors[b],
                         label=f"{lower:.2f}-{upper:.2f}",
                         hires_mode=HiResMode.BRAILLE,
@@ -549,6 +558,12 @@ class PlotterScreen(ModalScreen[None]):
                 # Use plot for lines
 
                 with contextlib.suppress(Exception):
-                    pw.scatter(x_vals, y_vals, marker="o", label=label)
+                    pw.scatter(
+                        x_vals,
+                        y_vals,
+                        marker=".",
+                        label=label,
+                        hires_mode=HiResMode.BRAILLE,
+                    )
 
         self.query_one("#plot-footer", Label).update(footer_text)

@@ -34,9 +34,9 @@ class GertForwardModelClient:
         self.realization_id = realization_id
         self.source_step = source_step
         self._client = httpx.Client(
-            base_url=self.api_url, 
+            base_url=self.api_url,
             timeout=httpx.Timeout(120.0, connect=10.0),
-            limits=httpx.Limits(max_connections=None, max_keepalive_connections=None)
+            limits=httpx.Limits(max_connections=None, max_keepalive_connections=None),
         )
 
     def _post_with_retry(
@@ -61,7 +61,7 @@ class GertForwardModelClient:
                 # E.g. 404 Not Found, usually not retryable but we retry just in case
                 # server is restarting.
                 last_exception = e
-                logger.warning(
+                logger.exception(
                     f"HTTP {e.response.status_code} for {endpoint}: "
                     f"Response text: {e.response.text}. Retrying in {delay}s...",
                 )
@@ -70,17 +70,16 @@ class GertForwardModelClient:
             except httpx.RequestError as e:
                 # E.g. ConnectTimeout
                 last_exception = e
-                logger.warning(
-                    f"Attempt {i + 1}/{max_retries} failed for {endpoint}: "
-                    f"{type(e).__name__}: {e}. "
+                logger.exception(
+                    f"Attempt {i + 1}/{max_retries} failed for {endpoint}."
                     f"Retrying in {delay}s...",
                 )
                 time.sleep(delay)
                 delay *= 2
             except Exception as e:
                 last_exception = e
-                logger.warning(
-                    f"Attempt {i + 1}/{max_retries} unexpected fail for {endpoint}: {e}. "
+                logger.exception(
+                    f"Attempt {i + 1}/{max_retries} unexpected fail for {endpoint}. "
                     f"Retrying in {delay}s...",
                 )
                 time.sleep(delay)

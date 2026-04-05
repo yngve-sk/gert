@@ -1,11 +1,12 @@
 import asyncio
+import contextlib
 import json
+import time
 from pathlib import Path
 
 import pytest
 
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
-from gert.experiments import ExecutionState
 from gert.experiments.models import (
     ExecutableForwardModelStep,
     ExperimentConfig,
@@ -16,11 +17,14 @@ from gert.experiments.models import (
 
 @pytest.fixture
 def stoppable_config(tmp_path: Path) -> ExperimentConfig:
-    # A single step that sleeps so we can interrupt it
+    dummy_script = tmp_path / "dummy_sleep.sh"
+    dummy_script.write_text("#!/bin/bash\nsleep $1\n")
+    dummy_script.chmod(0o755)
+
     step = ExecutableForwardModelStep(
         name="sleepy",
-        executable="/bin/sleep",
-        args=["1"],
+        executable=str(dummy_script),
+        args=["2"],
     )
 
     return ExperimentConfig(
@@ -31,7 +35,7 @@ def stoppable_config(tmp_path: Path) -> ExperimentConfig:
         forward_model_steps=[step],
         queue_config=QueueConfig(backend="local"),
         parameter_matrix=ParameterMatrix(
-            values={"p1": {0: 1.0, 1: 2.0}},  # 2 realizations
+            values={"p1": {0: 1.0, 1: 2.0, 2: 3.0}},
         ),
         observations=[],
         updates=[],
@@ -39,78 +43,124 @@ def stoppable_config(tmp_path: Path) -> ExperimentConfig:
 
 
 @pytest.mark.asyncio
-async def test_pause_and_resume_flow(
+async def test_reconstruct_state_from_log(
     stoppable_config: ExperimentConfig,
     tmp_path: Path,
 ) -> None:
-    # 1. Start Orchestrator
+    """Test that the orchestrator correctly rebuilds its state from the event log."""
+    execution_id = "test_resume_exec"
+    log_dir = stoppable_config.storage_base / stoppable_config.name / execution_id
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "status_events.jsonl"
+
+    events = [
+        {
+            "iteration": 0,
+            "realization_id": 0,
+            "status": "COMPLETED",
+            "step_name": "sleepy",
+            "timestamp": "2024-01-01T10:00:00Z",
+        },
+        {
+            "iteration": 0,
+            "realization_id": 0,
+            "status": "COMPLETED",
+            "timestamp": "2024-01-01T10:00:00Z",
+        },
+        {
+            "iteration": 0,
+            "realization_id": 1,
+            "status": "FAILED",
+            "timestamp": "2024-01-01T10:00:00Z",
+        },
+        {
+            "iteration": 0,
+            "realization_id": 2,
+            "status": "ACTIVE",
+            "timestamp": "2024-01-01T10:00:00Z",
+        },
+    ]
+
+    with log_file.open("w") as f:
+        for event in events:
+            f.write(json.dumps(event) + "\n")
+
     orchestrator = ExperimentOrchestrator(
         config=stoppable_config,
-        experiment_id="exp-123",
+        experiment_id=stoppable_config.name,
+        api_url="http://localhost:8080",
+        execution_id=execution_id,
     )
 
-    # Actually use the real job submitter, it will submit local processes.
+    assert orchestrator._current_iteration == 0
+    assert 0 in orchestrator._successful_realizations[0]
+    assert 1 in orchestrator._failed_realizations[0]
+    assert 2 not in orchestrator._successful_realizations[0]
+    assert 2 not in orchestrator._failed_realizations[0]
+    assert "sleepy" in orchestrator._successful_steps[0][0]
+
+
+@pytest.mark.asyncio
+async def test_hard_pause_cancels_jobs(
+    stoppable_config: ExperimentConfig,
+    tmp_path: Path,
+) -> None:
+    """Test that a hard pause immediately cancels running jobs."""
+    step = stoppable_config.forward_model_steps[0]
+    if isinstance(step, ExecutableForwardModelStep):
+        step.args = ["10"]
+
+    orchestrator = ExperimentOrchestrator(
+        config=stoppable_config,
+        experiment_id=stoppable_config.name,
+        api_url="http://localhost:8080",
+    )
+
     task = asyncio.create_task(orchestrator.run_experiment())
 
-    # Wait for the orchestrator to reach the loop and start jobs
     await asyncio.sleep(0.5)
 
-    # Ensure it's running
-    assert len(orchestrator._active_jobs[0]) == 2
+    assert orchestrator._active_jobs[0], "Jobs should be active"
 
-    # Force Pause
+    start_time = time.time()
     orchestrator.pause(force=True)
 
-    # Wait for task to exit
-    await asyncio.wait_for(task, timeout=2.0)
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(task, timeout=3.0)
 
-    # Verify state was saved
-    state_file = (
-        tmp_path
-        / "permanent_storage"
-        / stoppable_config.name
-        / orchestrator._execution_id
-        / "execution_state.json"
+    duration = time.time() - start_time
+    assert duration < 2.0, (
+        f"Hard pause took too long ({duration}s), jobs were not cancelled immediately."
     )
-    assert state_file.exists()
 
-    # Read state
-    state_json = state_file.read_text()
 
-    data = json.loads(state_json)
-    assert data["status"] == "PAUSED"
+@pytest.mark.asyncio
+async def test_soft_pause_waits_for_jobs(
+    stoppable_config: ExperimentConfig,
+    tmp_path: Path,
+) -> None:
+    """Test that a soft pause waits for running jobs to finish."""
+    step = stoppable_config.forward_model_steps[0]
+    if isinstance(step, ExecutableForwardModelStep):
+        step.args = ["1"]
 
-    # 2. Resume Orchestrator
-    # To test resume, let's pretend realization 0 succeeded before the crash/pause
-    state = ExecutionState.model_validate_json(state_json)
-    state.completed_realizations.append(0)
-    state.status = "RUNNING"
-
-    # Recreate orchestrator with resume state
-    orchestrator2 = ExperimentOrchestrator(
+    orchestrator = ExperimentOrchestrator(
         config=stoppable_config,
-        experiment_id="exp-123",
-        resume_state=state,
+        experiment_id=stoppable_config.name,
+        api_url="http://localhost:8080",
     )
 
-    assert orchestrator2._current_iteration == 0
+    task = asyncio.create_task(orchestrator.run_experiment())
 
-    # Run it
-    task2 = asyncio.create_task(orchestrator2.run_experiment())
+    await asyncio.sleep(0.1)
 
-    # Wait a bit
-    await asyncio.sleep(0.5)
+    start_time = time.time()
+    orchestrator.pause(force=False)
 
-    # It should have skipped realization 0, and only submitted realization 1!
-    # BUT wait, the previous test didn't write responses, so perform_update will fail if updates > 0.
-    # We set updates=[] in stoppable_config, so it will just finish the iteration and exit.
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(task, timeout=3.0)
 
-    # Complete realization 1 manually for speed, or let it finish (sleep 1)
-    await orchestrator2.record_realization_complete(0, 1, step_name="sleepy")
-
-    await asyncio.wait_for(task2, timeout=5.0)
-
-    # Did it run successfully?
-    assert (
-        len(orchestrator2._active_jobs[0]) == 1
-    )  # Only one job should be active (realization 1)
+    duration = time.time() - start_time
+    assert duration > 0.8, (
+        f"Soft pause returned too quickly ({duration}s), didn't wait for jobs."
+    )

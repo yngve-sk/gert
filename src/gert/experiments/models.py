@@ -79,6 +79,9 @@ class ParameterMatrix(BaseModel):
 
         Returns:
             A set of integer realization IDs.
+
+        Raises:
+            FileNotFoundError: If referenced datasets do not exist.
         """
         if self.dataframe is not None:
             return set(self.dataframe["realization"].to_list())
@@ -108,6 +111,9 @@ class ParameterMatrix(BaseModel):
                             .collect()
                         )
                         realizations.update(df["realization"].to_list())
+                else:
+                    msg = f"Dataset file not found: {source_path}"
+                    raise FileNotFoundError(msg)
 
         return realizations
 
@@ -463,9 +469,6 @@ class ExecutionState(BaseModel):
     completed_realizations: list[int] = Field(default_factory=list)
     failed_realizations: list[int] = Field(default_factory=list)
     error: str | None = None
-
-    def model_post_init(self, context: Any, /) -> None:
-        print("h")
 
 
 class ResponsePayload(BaseModel):

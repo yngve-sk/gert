@@ -8,7 +8,6 @@ from typing import Any
 import polars as pl
 
 from gert.experiments.models import (
-    ExecutionState,
     ExperimentConfig,
     ObservationDetail,
     ObservationSummary,
@@ -47,40 +46,6 @@ class StorageAPI:
                 except (json.JSONDecodeError, ValueError):
                     continue
         return experiments
-
-    def list_executions(self, experiment_id: str) -> list[ExecutionState]:
-        """List all executions for a given experiment.
-
-        Returns:
-            A list of ExecutionState objects, sorted by creation time (newest first).
-        """
-        exp_dir = self._base_storage_path / experiment_id
-        if not exp_dir.exists():
-            return []
-
-        executions = []
-        for exec_dir in exp_dir.iterdir():
-            if not exec_dir.is_dir():
-                continue
-            state_file = exec_dir / "execution_state.json"
-            if state_file.exists():
-                try:
-                    state = ExecutionState.model_validate_json(
-                        state_file.read_text(encoding="utf-8"),
-                    )
-                    executions.append(state)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-
-        # Sort by last modified time of the execution_state.json or directory?
-        # Let's use the directory's creation time (or state file)
-        executions.sort(
-            key=lambda x: (exp_dir / x.execution_id / "execution_state.json")
-            .stat()
-            .st_mtime,
-            reverse=True,
-        )
-        return executions
 
     async def flush(
         self,
@@ -280,26 +245,14 @@ class StorageAPI:
                 details=details,
             )
 
-            state_file = (
-                self._base_storage_path
-                / experiment_id
-                / execution_id
-                / "execution_state.json"
+            # Since we no longer store execution_state.json, we can either parse
+            # the event log here, or simply write the summary file always.
+            # Writing it always is safer and avoids redundant parsing.
+            iter_dir.mkdir(parents=True, exist_ok=True)
+            summary_file.write_text(
+                result.model_dump_json(indent=2),
+                encoding="utf-8",
             )
-            if state_file.exists():
-                state = ExecutionState.model_validate_json(
-                    state_file.read_text(encoding="utf-8"),
-                )
-                if state.current_iteration > iteration or state.status in {
-                    "COMPLETED",
-                    "FAILED",
-                    "CANCELED",
-                }:
-                    iter_dir.mkdir(parents=True, exist_ok=True)
-                    summary_file.write_text(
-                        result.model_dump_json(indent=2),
-                        encoding="utf-8",
-                    )
 
         except Exception:  # noqa: BLE001
             return None
@@ -330,10 +283,7 @@ class StorageAPI:
             schema_files = list(iter_dir.glob("responses_*.parquet"))
 
         if not schema_files:
-            legacy = iter_dir / "responses.parquet"
-            if legacy.exists():
-                return pl.read_parquet(legacy)
-            msg = f"Consolidated data for experiment '{experiment_id}' not found."
+            msg = "Consolidated responses for experiment not found."
             raise FileNotFoundError(msg)
 
         dfs = [pl.read_parquet(f) for f in schema_files]
@@ -516,19 +466,6 @@ class StorageAPI:
         exp_dir.mkdir(parents=True, exist_ok=True)
         config_file = exp_dir / "config.json"
         config_file.write_text(config.model_dump_json(indent=2))
-
-    def write_execution_state(
-        self,
-        experiment_name: str,
-        execution_id: str,
-        state_data: ExecutionState,
-    ) -> None:
-        """Write the orchestrator's execution state to disk."""
-        state_dir = self._base_storage_path / experiment_name / execution_id
-        state_dir.mkdir(parents=True, exist_ok=True)
-        state_file = state_dir / "execution_state.json"
-
-        state_file.write_text(state_data.model_dump_json(indent=2))
 
     async def consolidate(self, experiment_id: str, execution_id: str) -> None:
         """Manually trigger consolidation for an experiment/execution."""
