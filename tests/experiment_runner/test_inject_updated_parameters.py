@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import polars as pl
@@ -41,7 +42,7 @@ def test_inject_parameters_overwrites_with_updated_dataframe(tmp_path: Path) -> 
                     index_columns=["i", "j"],
                 ),
             ],
-            values={},
+            values={"SCALAR_PARAM": {0: 1.0, 1: 2.0}},
         ),
     )
 
@@ -55,6 +56,7 @@ def test_inject_parameters_overwrites_with_updated_dataframe(tmp_path: Path) -> 
     updated_df = pl.DataFrame(
         {
             "realization": [0, 1],
+            "SCALAR_PARAM": [10.0, 20.0],
             "PERM": [
                 [99.0, 199.0],
                 [299.0, 399.0],
@@ -88,3 +90,12 @@ def test_inject_parameters_overwrites_with_updated_dataframe(tmp_path: Path) -> 
 
     # The PERM values should be OVERWRITTEN by the updated_df values
     assert injected_df["PERM"].to_list() == [99.0, 199.0]
+
+    # Check the injected scalar parameters
+    injected_params_file = workdir / "parameters.json"
+    assert injected_params_file.exists()
+
+    with injected_params_file.open("r", encoding="utf-8") as f:
+        params_data = json.load(f)
+
+    assert params_data["SCALAR_PARAM"] == 10.0

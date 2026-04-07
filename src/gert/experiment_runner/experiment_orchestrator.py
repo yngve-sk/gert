@@ -762,6 +762,15 @@ class ExperimentOrchestrator:
             if realization_id in val_dict:
                 params[key] = val_dict[realization_id]
 
+        if parameters.dataframe is not None:
+            row_df = parameters.dataframe.filter(
+                pl.col("realization") == realization_id,
+            )
+            if len(row_df) > 0:
+                for key in parameters.values:
+                    if key in row_df.columns:
+                        params[key] = row_df[key].to_list()[0]
+
         with (workdir / "parameters.json").open("w", encoding="utf-8") as f:
             json.dump(params, f)
 
