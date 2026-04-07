@@ -29,11 +29,8 @@ def main() -> None:
     with client.run():
         # 1. Read input parameters from current workdir
         param_file = Path("parameters.json")
-        if param_file.exists():
-            params = json.loads(param_file.read_text(encoding="utf-8"))
-            x = float(params.get("MULTFLT", 1.0))
-        else:
-            x = float(args.realization)
+        params = json.loads(param_file.read_text(encoding="utf-8"))
+        x = float(params.get("MULTFLT", 1.0))
 
         # Execute the "Math" (y = x^2 + 10)
         computed_value = float(x**2 + 10)

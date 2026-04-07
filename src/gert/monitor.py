@@ -1482,6 +1482,16 @@ def start_monitor(
         experiment_id,
         execution_id,
     )
+
+    # Suppress terminal logging so the TUI isn't corrupted
+    root_logger = logging.getLogger()
+    for h in list(root_logger.handlers):
+        if isinstance(h, logging.StreamHandler) and not isinstance(
+            h,
+            logging.FileHandler,
+        ):
+            root_logger.removeHandler(h)
+
     try:
         app.run()
     except Exception:

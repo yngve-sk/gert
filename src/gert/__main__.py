@@ -4,21 +4,34 @@
 import argparse
 import json
 import logging
+import os
+import secrets
 import subprocess
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 import uvicorn
 
+from gert.discovery import (
+    NoGertServerFoundError,
+    find_gert_server,
+    get_discovery_file,
+    wait_for_gert_server,
+)
 from gert.experiments.models import (
     ParameterMatrix,
 )
 from gert.monitor import start_monitor
+from gert.server.gert_server import (
+    configure_server_logging,
+    create_gert_server,
+    get_free_port,
+)
+from gert.server.models import ConnectionInfo
 
 log = logging.getLogger(__name__)
 
@@ -68,47 +81,46 @@ def _load_config(config_path: Path) -> dict[str, Any]:
 
 def _ensure_server(
     client: httpx.Client,
-    api_url: str,
-) -> subprocess.Popen[Any] | None:
+    api_url: str | None,
+) -> tuple[subprocess.Popen[Any] | None, str]:
     """Ensure the GERT server is running, starting it if necessary."""
+    if api_url:
+        try:
+            client.base_url = api_url
+            client.get("/docs")
+        except httpx.ConnectError:
+            print(f"Server not found at {api_url}, scanning for server...")
+        else:
+            return None, api_url
+
     try:
-        client.get("/docs")
-    except httpx.ConnectError:
-        print(f"Server not running at {api_url}. Starting temporary server...")
-        parsed_url = urlparse(api_url)
-        host = parsed_url.hostname or "127.0.0.1"
-        port = parsed_url.port or 8000
+        info = find_gert_server()
+        url = info.base_url
+        print(f"Found running GERT server at {url}")
+    except NoGertServerFoundError:
+        print("No running GERT server found. Starting temporary server...")
+        port = get_free_port()
+        host = "127.0.0.1"
+        url = f"http://{host}:{port}"
+        client.base_url = url
 
         server_process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "gert",
-                "server",
-                "--host",
-                host,
-                "--port",
-                str(port),
-            ],
+            [sys.executable, "-m", "gert", "server", "--port", str(port)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
-        max_retries = 300
-        for i in range(max_retries):
-            try:
-                client.get("/docs")
-            except httpx.ConnectError:
-                if i == max_retries - 1:
-                    print("Failed to start temporary server.", file=sys.stderr)
-                    server_process.terminate()
-                    sys.exit(1)
-                time.sleep(0.1)
-            else:
-                return server_process
+        try:
+            wait_for_gert_server(timeout=15)
+        except NoGertServerFoundError:
+            print("Failed to start temporary server.", file=sys.stderr)
+            server_process.terminate()
+            sys.exit(1)
+
+        return server_process, url
     else:
-        return None
-    return None
+        client.base_url = url
+        return None, url
 
 
 def _check_execution_state(
@@ -173,7 +185,7 @@ def _poll_for_completion(
 
 def run_experiment(
     config_path: Path,
-    api_url: str,
+    api_url: str | None,
     *,
     wait_for_completion: bool = False,
     monitor: bool = False,
@@ -181,11 +193,11 @@ def run_experiment(
     """Run an experiment by submitting it to the GERT API."""
     config_data = _load_config(config_path)
     server_process = None
-    client = httpx.Client(base_url=api_url)
+    client = httpx.Client()
 
     try:
-        server_process = _ensure_server(client, api_url)
-        print(f"Submitting '{config_path}' to GERT server at {api_url}...")
+        server_process, resolved_api_url = _ensure_server(client, api_url)
+        print(f"Submitting '{config_path}' to GERT server at {resolved_api_url}...")
         try:
             # 1. Register the experiment
             response = client.post("/experiments", json=config_data)
@@ -204,9 +216,21 @@ def run_experiment(
                 f"Total Iterations: {num_iterations})",
             )
 
+            # Inject API URL and Auth Token into forward model arguments
+            connection_info = find_gert_server()
+            for step in config_data["forward_model_steps"]:
+                step["args"].extend(
+                    [
+                        "--api-url",
+                        connection_info.base_url,
+                        "--auth-token",
+                        connection_info.token,
+                    ],
+                )
+
             if monitor:
                 start_monitor(
-                    api_url,
+                    resolved_api_url,
                     config_id,
                     execution_id,
                 )
@@ -225,13 +249,14 @@ def run_experiment(
                 print("You can query the consolidated responses using:")
                 print(
                     f"  curl "
-                    f"{api_url}/experiments/{config_id}/executions/{execution_id}"
+                    f"{resolved_api_url}/experiments/{config_id}/executions/{execution_id}"
                     f"/ensembles/{last_it}/responses",
                 )
 
         except httpx.ConnectError:
             print(
-                f"❌ Connection error: Could not connect to GERT server at {api_url}.",
+                f"❌ Connection error: Could not connect to GERT server at "
+                f"{resolved_api_url}.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -250,8 +275,172 @@ def run_experiment(
             server_process.wait()
 
 
-def main() -> None:
-    """Entry point for the GERT CLI."""
+def handle_connection_info() -> None:
+    """Handle the 'gert connection info' command."""
+    try:
+        info = find_gert_server()
+        print("✅ Found running GERT server.")
+        print(f"  {'Host':<10}: {info.host}")
+        print(f"  {'Port':<10}: {info.port}")
+        print(f"  {'Base_url':<10}: {info.base_url}")
+        print(f"  {'Token':<10}: {info.token}")
+        print(f"  {'Server_id':<10}: {info.server_id}")
+        print(f"  {'Pid':<10}: {info.pid}")
+        print(f"  {'Version':<10}: {info.version}")
+    except NoGertServerFoundError:
+        print("❌ No running GERT server found.", file=sys.stderr)
+        sys.exit(1)
+
+
+def handle_connection_url() -> None:
+    """Handle the 'gert connection url' command."""
+    try:
+        info = find_gert_server()
+        print(info.base_url)
+    except NoGertServerFoundError:
+        print("❌ No running GERT server found.", file=sys.stderr)
+        sys.exit(1)
+
+
+def handle_connection_token() -> None:
+    """Handle the 'gert connection token' command."""
+    try:
+        info = find_gert_server()
+        print(info.token)
+    except NoGertServerFoundError:
+        print("❌ No running GERT server found.", file=sys.stderr)
+        sys.exit(1)
+
+
+def handle_connection_wait() -> None:
+    """Handle the 'gert connection wait' command."""
+    print("Waiting for GERT server to become available...")
+    try:
+        wait_for_gert_server()
+        print("✅ GERT server is available.")
+    except NoGertServerFoundError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _handle_run_command(args: argparse.Namespace) -> None:
+    """Handle the 'gert run' command."""
+    run_experiment(
+        args.config,
+        args.api_url,
+        wait_for_completion=args.wait,
+        monitor=args.monitor,
+    )
+
+
+def _handle_server_command(args: argparse.Namespace) -> None:
+    """Handle the 'gert server' command."""
+    configure_server_logging()
+    port = args.port if args.port != 0 else get_free_port()
+    host = args.host
+    pid = os.getpid()
+
+    connection_info = ConnectionInfo(
+        host=host,
+        port=port,
+        base_url=f"http://{host}:{port}",
+        token=f"gert_{secrets.token_hex(16)}",
+        server_id=f"gert_{pid}_{int(time.time())}",
+        pid=pid,
+    )
+
+    try:
+        discovery_file = get_discovery_file()
+        discovery_file.parent.mkdir(parents=True, exist_ok=True)
+        with discovery_file.open("w", encoding="utf-8") as f:
+            f.write(connection_info.model_dump_json(indent=2))
+        print(f"Starting GERT server on {host}:{port}...")
+        gert_app = create_gert_server(conn_info=connection_info)
+        uvicorn.run(
+            gert_app,
+            host=host,
+            port=port,
+            reload=args.reload,
+        )
+    finally:
+        if discovery_file.exists():
+            discovery_file.unlink()
+
+
+def _handle_monitor_command(args: argparse.Namespace) -> None:
+    """Handle the 'gert monitor' command."""
+    client = httpx.Client()
+    server_process = None
+    try:
+        server_process, resolved_api_url = _ensure_server(client, args.api_url)
+        start_monitor(resolved_api_url, args.experiment_id)
+    finally:
+        client.close()
+        if server_process:
+            server_process.terminate()
+            server_process.wait()
+
+
+def _handle_connect_command(args: argparse.Namespace) -> None:
+    """Handle the 'gert connect' command."""
+    config_data = _load_config(args.config)
+    exp_name = config_data["name"]
+
+    client = httpx.Client()
+    server_process = None
+    try:
+        server_process, resolved_api_url = _ensure_server(client, args.api_url)
+        client.base_url = resolved_api_url
+
+        # Find experiment ID by name
+        resp = client.get("/experiments")
+        resp.raise_for_status()
+        experiments = resp.json()
+
+        experiment_id = None
+        for exp in experiments:
+            if exp["name"] == exp_name:
+                experiment_id = exp["id"]
+                break
+
+        if not experiment_id:
+            print(
+                f"Experiment '{exp_name}' not recognized by server. "
+                f"Registering configuration...",
+            )
+            resp = client.post("/experiments", json=config_data)
+            resp.raise_for_status()
+            experiment_id = resp.json()["id"]
+
+        start_monitor(resolved_api_url, experiment_id)
+    except (httpx.ConnectError, NoGertServerFoundError):
+        print(
+            "❌ Connection error: Could not connect to a GERT server.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    finally:
+        client.close()
+        if server_process is not None:
+            print("Shutting down temporary server...")
+            server_process.terminate()
+            server_process.wait()
+
+
+def _handle_connection_subcommands(args: argparse.Namespace) -> None:
+    """Handle 'gert connection' subcommands."""
+    if args.connection_command == "info":
+        handle_connection_info()
+    elif args.connection_command == "url":
+        handle_connection_url()
+    elif args.connection_command == "token":
+        handle_connection_token()
+    elif args.connection_command == "wait":
+        handle_connection_wait()
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the GERT CLI."""
     parser = argparse.ArgumentParser(
         description="GERT - Generic Ensemble Reservoir Tool CLI",
     )
@@ -273,8 +462,8 @@ def main() -> None:
     )
     run_parser.add_argument(
         "--api-url",
-        default="http://localhost:8000",
-        help="Base URL of the GERT server (default: http://localhost:8000)",
+        default=None,
+        help="Base URL of the GERT server (if not provided, will scan for server)",
     )
     run_parser.add_argument(
         "--wait",
@@ -297,8 +486,8 @@ def main() -> None:
     server_parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Port to bind to (default: 8000)",
+        default=0,
+        help="Port to bind to (default: 0, means auto-select)",
     )
     server_parser.add_argument(
         "--reload",
@@ -306,10 +495,10 @@ def main() -> None:
         help="Enable auto-reload for development",
     )
 
-    # `gert monitor` (deprecated/alias for backward compatibility without execution_id)
+    # `gert monitor`
     monitor_parser = subparsers.add_parser(
         "monitor",
-        help="Monitor an running GERT experiment",
+        help="Monitor a running GERT experiment",
     )
     monitor_parser.add_argument(
         "experiment_id",
@@ -318,8 +507,8 @@ def main() -> None:
     )
     monitor_parser.add_argument(
         "--api-url",
-        default="http://localhost:8000",
-        help="Base URL of the GERT server (default: http://localhost:8000)",
+        default=None,
+        help="Base URL of the GERT server (if not provided, will scan for server)",
     )
 
     # `gert connect`
@@ -334,74 +523,41 @@ def main() -> None:
     )
     connect_parser.add_argument(
         "--api-url",
-        default="http://localhost:8000",
-        help="Base URL of the GERT server (default: http://localhost:8000)",
+        default=None,
+        help="Base URL of the GERT server (if not provided, will scan for server)",
     )
 
-    args = parser.parse_args()
+    # `gert connection`
+    conn_parser = subparsers.add_parser(
+        "connection",
+        help="Commands for server service discovery",
+    )
+    conn_subparsers = conn_parser.add_subparsers(
+        dest="connection_command",
+        required=True,
+    )
+    conn_subparsers.add_parser("info", help="Show full connection details with status")
+    conn_subparsers.add_parser("url", help="Print just base_url for scripts")
+    conn_subparsers.add_parser("token", help="Print just auth token for scripts")
+    conn_subparsers.add_parser("wait", help="Wait for server to become available")
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Entry point for the GERT CLI."""
+    args = _parse_args()
 
     if args.command == "run":
-        run_experiment(
-            args.config,
-            args.api_url,
-            wait_for_completion=args.wait,
-            monitor=args.monitor,
-        )
+        _handle_run_command(args)
     elif args.command == "server":
-        print(f"Starting GERT server on {args.host}:{args.port}...")
-        uvicorn.run(
-            "gert.server.gert_server:gert_server_app",
-            host=args.host,
-            port=args.port,
-            reload=args.reload,
-        )
+        _handle_server_command(args)
     elif args.command == "monitor":
-        start_monitor(args.api_url, args.experiment_id)
+        _handle_monitor_command(args)
     elif args.command == "connect":
-        config_data = _load_config(args.config)
-        exp_name = config_data["name"]
-
-        client = httpx.Client(base_url=args.api_url)
-        server_process = None
-        try:
-            server_process = _ensure_server(client, args.api_url)
-
-            # Find experiment ID by name
-            resp = client.get("/experiments")
-            resp.raise_for_status()
-            experiments = resp.json()
-
-            experiment_id = None
-            for exp in experiments:
-                if exp["name"] == exp_name:
-                    experiment_id = exp["id"]
-                    break
-
-            if not experiment_id:
-                # If not found, register it now to make it known to the server.
-                # (Even if it's already in storage, registering ensures it's in memory)
-                print(
-                    f"Experiment '{exp_name}' not recognized by server. "
-                    f"Registering configuration...",
-                )
-                resp = client.post("/experiments", json=config_data)
-                resp.raise_for_status()
-                experiment_id = resp.json()["id"]
-
-            start_monitor(args.api_url, experiment_id)
-        except httpx.ConnectError:
-            print(
-                f"❌ Connection error: Could not connect to "
-                f"GERT server at {args.api_url}.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        finally:
-            client.close()
-            if server_process is not None:
-                print("Shutting down temporary server...")
-                server_process.terminate()
-                server_process.wait()
+        _handle_connect_command(args)
+    elif args.command == "connection":
+        _handle_connection_subcommands(args)
 
 
 if __name__ == "__main__":

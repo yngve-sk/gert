@@ -8,7 +8,7 @@ import traceback
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import (
     APIRouter,
@@ -29,12 +29,35 @@ from gert.experiments.models import (
     ObservationSummary,
     UpdateMetadata,
 )
+from gert.server.models import ConnectionInfo
 from gert.storage.api import StorageAPI
 from gert.storage.ingestion import IngestionReceiver
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["experiments"])
+
+
+@router.get(
+    "/connection-info",
+    summary="Get server connection information",
+    description="Returns the connection details for this GERT server instance.",
+)
+async def get_connection_info(request: Request) -> ConnectionInfo:
+    """Return the server's connection information.
+
+    Raises:
+        HTTPException: if connection information is not available.
+    """
+    if (
+        not hasattr(request.app.state, "connection_info")
+        or not request.app.state.connection_info
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Connection info not yet available.",
+        )
+    return cast("ConnectionInfo", request.app.state.connection_info)
 
 
 class StepStatus(BaseModel):
@@ -429,6 +452,27 @@ async def get_manifest(
     return api.get_manifest(config.name, execution_id, iteration)
 
 
+def _ensure_config_loaded(experiment_id: str) -> ExperimentConfig | None:
+    """Ensure the experiment config is loaded into memory, fetching if needed."""
+    server_state = ServerState.get()
+    if experiment_id in server_state.configs:
+        return server_state.configs[experiment_id]
+
+    base = Path("./permanent_storage")
+    config_file = base / experiment_id / "config.json"
+    if config_file.exists():
+        try:
+            config = ExperimentConfig.model_validate_json(
+                config_file.read_text(encoding="utf-8"),
+            )
+            server_state.configs[experiment_id] = config
+        except Exception:
+            logger.exception(f"Failed to load experiment config {config_file}")
+        else:
+            return config
+    return None
+
+
 @router.get(
     "/experiments/{experiment_id}/config",
     summary="Retrieve experiment configuration",
@@ -447,13 +491,13 @@ async def get_experiment_config(
     Raises:
         HTTPException: If the experiment is not found.
     """
-    server_state = ServerState.get()
-    if experiment_id not in server_state.configs:
+    config = _ensure_config_loaded(experiment_id)
+    if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Experiment '{experiment_id}' not found",
         )
-    return server_state.configs[experiment_id]
+    return config
 
 
 @router.post(
@@ -472,13 +516,12 @@ async def start_experiment(
         HTTPException: If the experiment is not found.
     """
     server_state = ServerState.get()
-    if experiment_id not in server_state.configs:
+    config = _ensure_config_loaded(experiment_id)
+    if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Experiment '{experiment_id}' not found",
         )
-
-    config = server_state.configs[experiment_id]
 
     # Validate environment-specific constraints (executables exist, etc)
     # This must happen before orchestration starts.
@@ -578,14 +621,12 @@ async def list_executions(
     Raises:
         HTTPException: If the experiment is not found.
     """
-    server_state = ServerState.get()
-    if experiment_id not in server_state.configs:
+    config = _ensure_config_loaded(experiment_id)
+    if not config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Experiment '{experiment_id}' not found",
         )
-
-    config = server_state.configs[experiment_id]
 
     exp_dir = config.storage_base / experiment_id
     if not exp_dir.exists():

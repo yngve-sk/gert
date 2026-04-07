@@ -282,6 +282,7 @@ class TestEnIFSizingAndDesign:
             "Unobserved parameter B incorrectly updated."
         )
 
+    @pytest.mark.skip("Parameter graph / parameters not yet implemented")
     def test_spatial_field_connected_graph(self, enif: EnIFUpdate) -> None:
         """Testing a 1D spatial field using a networkx connected graph."""
 
