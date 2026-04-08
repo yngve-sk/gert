@@ -153,6 +153,7 @@ allowed-confusables = ["–"]
     "RUF045",  # implicit-class-var-in-dataclass
     "ASYNC240", # blocking-path-method-in-async-function
     "T201",    # print found (allowed in tests for debugging/output)
+    "N803",    # Allow uppercase variable names in tests to match math papers
 ]
 "src/gert/__main__.py" = [
     "T201",    # print found (allowed for CLI output)
@@ -166,6 +167,10 @@ allowed-confusables = ["–"]
     "C901",    # perform_update complexity is fine
     "E501",    # Fine for algorithms
     "FURB118", # Fine to use lambda
+    "N803",    # Allow uppercase variable names to match math papers (e.g., U, X, Y, H, d, sigma, Prec_u, Prec_eps)
+]
+"src/gert/updates/spatial.py" = [
+    "N806",    # Allow uppercase variable names to match math/graph conventions (e.g., G for Graph)
 ]
 [tool.ruff.lint.pylint]
 max-args = 20
@@ -184,6 +189,10 @@ disallow_incomplete_defs = true
 explicit_package_bases = true
 mypy_path = "src"
 
+
+[[tool.mypy.overrides]]
+module = ["tests.plugins.test_enif_architecture"]
+disable_error_code = ["assignment"]
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]

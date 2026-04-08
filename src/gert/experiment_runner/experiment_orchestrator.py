@@ -18,12 +18,15 @@ from gert.experiments.models import (
     ExecutableForwardModelStep,
     ExecutableHook,
     ExperimentConfig,
+    GridMetadata,
     ParameterMatrix,
+    ParameterMetadata,
     UpdateMetadata,
 )
 from gert.plugins.plugins import GertRuntimePlugins
 from gert.storage.api import StorageAPI
 from gert.storage.consolidation import ConsolidationWorker
+from gert.updates.spatial import SpatialToolkit
 
 from .job_submitter import JobSubmitter
 from .realization_workdir_manager import RealizationWorkdirManager
@@ -900,7 +903,6 @@ class ExperimentOrchestrator:
             iteration=iteration,
         )
 
-        # simulated_responses (from storage for this iteration)
         obs_df = self._observations_to_df()
         try:
             sim_resp_df = self._storage_api.get_responses(
@@ -937,8 +939,50 @@ class ExperimentOrchestrator:
 
         logger.info(f"Retrieved {len(sim_resp_df)} responses for iteration {iteration}")
 
-        # 2. Find and execute plugin
+        # 2. Prepare Metadata and SpatialToolkit
+        toolkit = SpatialToolkit()
+        parameter_metadata = []
+
+        # Map to find which parameter belongs to which dataset/grid
+        param_to_grid = {}
+        grid_configs = {}
+
+        for i, dataset in enumerate(self._config.parameter_matrix.datasets):
+            grid_id: str | None = f"grid_{i}"  # Initialize as str | None
+            for p_name in dataset.parameters:
+                param_to_grid[p_name] = grid_id
+
+            # In a real scenario, we'd read the actual coordinates and shape
+            # For now, we infer a simple shape or use a placeholder
+            # The coordinates are stored in the dataset files
+            grid_configs[grid_id] = {
+                "dataset_idx": i,
+                "index_columns": dataset.index_columns,
+            }
+
+        # Identify updatable keys for this step
         update_step = self._config.updates[iteration]
+        updatable_keys = update_step.updatable_parameters or [
+            k for k, v in self._config.parameter_matrix.metadata.items() if v.updatable
+        ]
+
+        for key in updatable_keys:
+            grid_id = param_to_grid.get(key)
+            if grid_id is not None and grid_id not in toolkit.get_grids():
+                # Register grid with toolkit
+                # Note: We'd ideally have shape in the config.
+                # Fallback to a stub shape (100, 100, 1) or similar if unknown.
+                grid = GridMetadata(id=grid_id, shape=(100, 100, 1))
+                toolkit.register_grid(grid)
+
+            pm = ParameterMetadata(
+                name=key,
+                columns=[key],  # Simplified: for Wide DF, column name is key
+                grid_id=grid_id,
+            )
+            parameter_metadata.append(pm)
+
+        # 3. Find and execute plugin
         algo = next(
             (
                 a
@@ -952,17 +996,13 @@ class ExperimentOrchestrator:
             msg = f"Update algorithm '{update_step.algorithm}' not found."
             raise ValueError(msg)
 
-        # updatable_keys
-        keys = update_step.updatable_parameters or [
-            k for k, v in self._config.parameter_matrix.metadata.items() if v.updatable
-        ]
-
         func = functools.partial(
             algo.perform_update,
-            current_parameters=current_params_df,
+            parameters=current_params_df,
+            parameter_metadata=parameter_metadata,
             simulated_responses=sim_resp_df,
             observations=obs_df,
-            updatable_parameter_keys=keys,
+            toolkit=toolkit,
             algorithm_arguments=update_step.arguments,
         )
 

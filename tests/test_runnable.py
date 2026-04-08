@@ -1,9 +1,7 @@
 import asyncio
 import io
 import json
-import shutil
 import sys
-from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -15,21 +13,13 @@ from gert.server.gert_server import gert_server_app
 from gert.storage.consolidation import ConsolidationWorker
 
 
-@pytest.fixture
-def clean_storage() -> Generator[None]:
-    """Fixture to clean up the storage directory."""
-    for path in [Path("./permanent_storage"), Path("./workdirs")]:
-        if path.exists():
-            shutil.rmtree(path)
-    yield
-    for path in [Path("./permanent_storage"), Path("./workdirs")]:
-        if path.exists():
-            shutil.rmtree(path)
-
-
 @pytest.mark.asyncio
-async def test_end_to_end_local_run(clean_storage: None) -> None:
+async def test_end_to_end_local_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     """Test a full end-to-end local execution loop."""
+    monkeypatch.chdir(tmp_path)
     client = TestClient(gert_server_app)
 
     # 1. Register experiment
@@ -88,19 +78,26 @@ async def test_end_to_end_local_run(clean_storage: None) -> None:
     iteration = res_json["iteration"]
 
     # 3. Wait for jobs to finish (local psij is usually fast)
-    # We'll check for the workdir creation
+    # We'll check for the workdir creation with a polling loop
     workdir_base = (
         Path("./workdirs").resolve()
         / config_data["name"]
         / execution_id
         / f"iter-{iteration}"
     )
+
+    # Poll for workdir_base to be created
+    for _ in range(50):
+        if workdir_base.exists():
+            break
+        await asyncio.sleep(0.1)
     assert workdir_base.exists()
+
     # Check realization 0 and 1 workdirs
     for i in range(2):
         realization_dir = workdir_base / f"realization-{i}"
-        # Wait a bit for the job to finish
-        for _ in range(20):
+        # Wait a bit for the job to finish and response.json to be created
+        for _ in range(50):
             if (realization_dir / "response.json").exists():
                 break
             await asyncio.sleep(0.1)

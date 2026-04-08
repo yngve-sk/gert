@@ -9,7 +9,38 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, model_validato
 from pydantic.json_schema import SkipJsonSchema
 
 
+class GridMetadata(BaseModel):
+    """Configuration for a spatial grid arena."""
+
+    id: str  # e.g., "main_reservoir_grid"
+    shape: tuple[int, ...]  # The bounding box (e.g., (Nx, Ny, Nz))
+
+    # Internal server-side storage of coordinates.
+    # For a 3D grid, this DataFrame has columns ['i', 'j', 'k'].
+    # We use a private attribute to avoid serialization issues as per docs.
+    _coordinates: pl.DataFrame | None = None
+
+
 class ParameterMetadata(BaseModel):
+    """Lightweight descriptor mapping flat parameter to logical parameters."""
+
+    name: str = Field(
+        ...,
+        description=("The logical base name of the parameter (e.g., 'PERM')."),
+    )
+    columns: list[str] = Field(
+        ...,
+        description=("The exact list of corresponding column keys in the parameter."),
+    )
+    grid_id: str | None = Field(
+        default=None,
+        description=(
+            "Pointer to the GridMetadata. None if the parameter is a global scalar."
+        ),
+    )
+
+
+class ParameterConfig(BaseModel):
     """Metadata describing a parameter's properties across the entire ensemble."""
 
     source: str | None = None
@@ -55,7 +86,7 @@ class ParameterMatrix(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # Metadata keyed by parameter name.
-    metadata: dict[str, ParameterMetadata] = Field(default_factory=dict)
+    metadata: dict[str, ParameterConfig] = Field(default_factory=dict)
 
     # 1. Inline Sparse Data pr realization (for scalars)
     # values["MULTFLT"] = {0: 1.1, 1: 1.2, 5: 1.3, ...}
