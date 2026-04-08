@@ -32,7 +32,6 @@ def cleanup_storage() -> Generator[None]:
         shutil.rmtree(workdirs_path)
 
 
-@pytest.mark.skip(reason="Update for parameter types not yet added")
 def test_semi_realistic_da_convergence(
     copy_example: Callable[[str], Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -43,7 +42,6 @@ def test_semi_realistic_da_convergence(
     monkeypatch.chdir(config_dir)
 
     monkeypatch.setenv("GERT_DISCOVERY_DIR", str(tmp_path))
-    monkeypatch.setattr("gert.discovery.DISCOVERY_DIR", tmp_path)
 
     subprocess.run([sys.executable, "generate_prior.py"], check=True)
     subprocess.run([sys.executable, "setup_observations.py"], check=True)

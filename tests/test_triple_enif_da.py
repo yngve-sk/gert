@@ -33,7 +33,6 @@ def cleanup_storage() -> Generator[None]:
         shutil.rmtree(workdirs_path)
 
 
-@pytest.mark.skip(reason="Update for parameter types not yet added")
 def test_triple_enif_da_convergence(
     copy_example: Callable[[str], Path],
     monkeypatch: pytest.MonkeyPatch,

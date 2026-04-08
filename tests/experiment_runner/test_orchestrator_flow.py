@@ -12,6 +12,7 @@ from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrato
 from gert.experiments.models import (
     ExperimentConfig,
     ParameterMatrix,
+    ParameterMetadata,
     QueueConfig,
     UpdateStep,
 )
@@ -25,14 +26,15 @@ class MockUpdateAlgorithm(UpdateAlgorithm):
 
     def perform_update(
         self,
-        current_parameters: pl.DataFrame,
+        parameters: pl.DataFrame,
+        parameter_metadata: list[ParameterMetadata],
         simulated_responses: pl.DataFrame,
         observations: pl.DataFrame,
-        updatable_parameter_keys: list[str],
+        toolkit: Any,
         algorithm_arguments: dict[str, Any],
     ) -> pl.DataFrame:
         # Just return current params unchanged for flow testing
-        return current_parameters.clone()
+        return parameters.clone()
 
 
 @pytest.fixture

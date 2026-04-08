@@ -8,7 +8,9 @@ import polars as pl
 import pytest
 from polars.testing import assert_series_equal
 
+from gert.experiments.models import ParameterMetadata
 from gert.plugins.enif_update import EnIFUpdate
+from gert.updates.spatial import SpatialToolkit
 
 
 @pytest.fixture
@@ -31,11 +33,17 @@ def _run_isolated_update(
     elif "random_seed" not in args:
         args["random_seed"] = 42
 
+    parameter_metadata = [
+        ParameterMetadata(name=key, columns=[key]) for key in updatable_keys
+    ]
+    toolkit = SpatialToolkit()
+
     return algorithm.perform_update(
-        current_parameters=prior,
+        parameters=prior,
+        parameter_metadata=parameter_metadata,
         simulated_responses=responses,
         observations=observations,
-        updatable_parameter_keys=updatable_keys,
+        toolkit=toolkit,
         algorithm_arguments=args,
     )
 
@@ -282,7 +290,6 @@ class TestEnIFSizingAndDesign:
             "Unobserved parameter B incorrectly updated."
         )
 
-    @pytest.mark.skip("Parameter graph / parameters not yet implemented")
     def test_spatial_field_connected_graph(self, enif: EnIFUpdate) -> None:
         """Testing a 1D spatial field using a networkx connected graph."""
 
