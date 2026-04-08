@@ -558,10 +558,9 @@ class PlotterScreen(ModalScreen[None]):
                 # Use plot for lines
 
                 with contextlib.suppress(Exception):
-                    pw.scatter(
+                    pw.plot(
                         x_vals,
                         y_vals,
-                        marker=".",
                         label=label,
                         hires_mode=HiResMode.BRAILLE,
                     )
