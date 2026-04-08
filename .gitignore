@@ -38,6 +38,7 @@ coverage.xml
 *.swp
 *.swo
 .venv
+.gemini/
 
 # --- Data & Logs ---
 # Ignore local logs and sqlite DBs if used for dev
