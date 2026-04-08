@@ -27,7 +27,7 @@ A tabular or list view summarizing the progress of *all* iterations in the exper
     *   **Progress Bar**: Visual indicator of `completed_realizations` / `total_realizations`.
     *   **⚙️ Forward Model Steps**: `{completed_steps}/{total_planned_steps}`.
     *   **📤 Responses**: Total number of simulated responses emitted in this iteration.
-    *   **Δ Misfit**: The `average_normalized_misfit` (if `ObservationSummary` is available).
+    *   **Δ Misfit**: The sum of `absolute_misfit` for each observation (if `ObservationSummary` is available).
 
 ---
 
@@ -66,7 +66,7 @@ Displayed when an `Iteration N` node is selected.
 
 **Data & Assimilation Statistics**
 *   **📤 Responses Received**: Total number of simulated response records collected across all realizations in this iteration.
-*   **🎯 Average Normalized Misfit**: The `average_normalized_misfit` from the `ObservationSummary` (shows how far the ensemble is from the truth, scaled by uncertainty).
+*   **🎯 Sum Abs Misfit**: The sum of `absolute_misfit` across all observations from the `ObservationSummary` (shows the total error magnitude of the ensemble, normalized by standard deviation).
 *   **📉 Average Absolute Residual**: The raw physical unit error (`average_absolute_residual`).
 
 ### 3.3 Mathematical Update Summary

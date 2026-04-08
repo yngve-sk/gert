@@ -167,32 +167,27 @@ class StorageAPI:
             # Residuals and misfits
             # residual: The raw error (simulation - observation).
             # absolute_misfit: The absolute error in terms of std deviations.
+            # misfit: Signed chi-squared misfit: sign(m) * m^2 where m = residual/sigma
             residual = joined["value"] - joined["value_obs"]
             normal_misfit = residual / joined["std_dev"]
-
-            # Scale into [-1, 1] range while preserving 0 as a perfect match.
-            # We do this by dividing by the maximum absolute error in the ensemble.
-            max_abs_misfit = normal_misfit.abs().max()
-            scaling_factor = max_abs_misfit if max_abs_misfit != 0.0 else 1.0
-
-            normalized_misfit = normal_misfit / scaling_factor
+            misfit = normal_misfit.sign() * (normal_misfit**2)
 
             joined = joined.with_columns(
                 residual.alias("residual"),
                 residual.abs().alias("absolute_residual"),
                 normal_misfit.alias("normal_misfit"),
                 normal_misfit.abs().alias("absolute_misfit"),
-                normalized_misfit.alias("normalized_misfit"),
+                misfit.alias("misfit"),
             )
 
             # Aggregate totals across all observations
-            mean_norm_misfit = joined["normalized_misfit"].mean()
+            mean_misfit = joined["misfit"].mean()
             mean_abs_res = joined["absolute_residual"].mean()
             mean_abs_misfit = joined["absolute_misfit"].mean()
 
-            avg_norm_misfit = (
-                float(typing.cast("float", mean_norm_misfit))
-                if isinstance(mean_norm_misfit, (int, float))
+            avg_misfit = (
+                float(typing.cast("float", mean_misfit))
+                if isinstance(mean_misfit, (int, float))
                 else 0.0
             )
             avg_abs_res = (
@@ -209,7 +204,7 @@ class StorageAPI:
             # Details exposes various misfit metrics per observation, averaged
             details_df = joined.group_by(common_cols).agg(
                 pl.col("absolute_residual").mean(),
-                pl.col("normalized_misfit").mean(),
+                pl.col("misfit").mean(),
                 pl.col("absolute_misfit").mean(),
             )
 
@@ -217,14 +212,13 @@ class StorageAPI:
             details = []
             for row in details_df.to_dicts():
                 abs_res = float(row.get("absolute_residual", 0.0))
-                norm_misfit = float(row.get("normalized_misfit", 0.0))
+                misfit_val = float(row.get("misfit", 0.0))
                 abs_misfit = float(row.get("absolute_misfit", 0.0))
 
                 key_dict = {
                     str(k): str(v)
                     for k, v in row.items()
-                    if k
-                    not in {"absolute_residual", "normalized_misfit", "absolute_misfit"}
+                    if k not in {"absolute_residual", "misfit", "absolute_misfit"}
                 }
                 response_val = key_dict.pop("response", None)
 
@@ -233,13 +227,13 @@ class StorageAPI:
                         response=response_val,
                         key=key_dict,
                         absolute_residual=abs_res,
-                        normalized_misfit=norm_misfit,
+                        misfit=misfit_val,
                         absolute_misfit=abs_misfit,
                     ),
                 )
 
             result = ObservationSummary(
-                average_normalized_misfit=avg_norm_misfit,
+                average_misfit=avg_misfit,
                 average_absolute_residual=avg_abs_res,
                 average_absolute_misfit=avg_abs_misfit,
                 details=details,

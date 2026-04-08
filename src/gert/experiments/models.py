@@ -394,7 +394,7 @@ class ObservationDetail(BaseModel):
     response: str | None = None
     key: dict[str, str] = Field(default_factory=dict)
     absolute_residual: float
-    normalized_misfit: float
+    misfit: float
     absolute_misfit: float
 
 
@@ -402,7 +402,7 @@ class ObservationSummary(BaseModel):
     """Summary of observation mismatches across an iteration."""
 
     average_absolute_residual: float
-    average_normalized_misfit: float
+    average_misfit: float
     average_absolute_misfit: float
     details: list[ObservationDetail]
 

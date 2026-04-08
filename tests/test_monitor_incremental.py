@@ -29,7 +29,7 @@ def test_monitor_process_observation_summary() -> None:
     )
 
     summary = ObservationSummary(
-        average_normalized_misfit=1.5,
+        average_misfit=1.5,
         average_absolute_residual=2.5,
         average_absolute_misfit=3.5,
         details=[],
@@ -38,4 +38,4 @@ def test_monitor_process_observation_summary() -> None:
     app.process_observation_summary(0, summary)
 
     assert 0 in app._observation_summaries
-    assert app._observation_summaries[0].average_normalized_misfit == 1.5
+    assert app._observation_summaries[0].average_misfit == 1.5
