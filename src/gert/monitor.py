@@ -216,7 +216,7 @@ class MonitorDashboardScreen(Screen[None]):
                     Label("Ensemble", classes="iteration-label"),
                     Label("Progress Bar", classes="header-label-centered"),
                     Label(
-                        f"{ICON_FM} Steps | {ICON_RES} Resps | avg norm misfit",
+                        f"{ICON_FM} Steps | {ICON_RES} Resps | sum abs misfit",
                         classes="iteration-counter",
                     ),
                     classes="header-row",
@@ -1027,8 +1027,8 @@ class GertMonitorApp(App[None]):
             resp_info = f"{ICON_RES} {str(counts.total_responses).rjust(4)}"
 
             misfit_val = (
-                counts.observation_summary.average_normalized_misfit
-                if counts.observation_summary
+                sum(d.absolute_misfit for d in counts.observation_summary.details)
+                if counts.observation_summary and counts.observation_summary.details
                 else None
             )
             misfit_str = f"{misfit_val:.3f}" if misfit_val is not None else "N/A"
@@ -1293,13 +1293,15 @@ class GertMonitorApp(App[None]):
 
         obs_summary = self._observation_summaries.get(iteration)
         if obs_summary:
-            n_misfit = obs_summary.average_normalized_misfit
+            # The sum of the averaged absolute misfits across all observations
+            sum_abs_misfit = sum(d.absolute_misfit for d in obs_summary.details)
             a_resid = obs_summary.average_absolute_residual
             content.append(
-                f"🎯 Avg Misfit: {n_misfit:.4f} | 📉 Avg Residual: {a_resid:.4f}",
+                f"🎯 Sum Abs Misfit: {sum_abs_misfit:.4f} | "
+                f"📉 Avg Residual: {a_resid:.4f}",
             )
         else:
-            content.append("🎯 Avg Misfit: Calc... | 📉 Avg Residual: Calc...")
+            content.append("🎯 Sum Abs Misfit: Calc... | 📉 Avg Residual: Calc...")
 
         viewer.update_response("\n".join(content))
 

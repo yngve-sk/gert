@@ -70,36 +70,31 @@ def test_get_observation_summary_calculates_and_caches(
     )
     result = api.get_observation_summary(exp_id, exec_id, iter_nr)
     assert result is not None
-    assert result.average_normalized_misfit is not None
+    assert result.average_misfit is not None
     assert result.average_absolute_residual is not None
     assert result.average_absolute_misfit is not None
     assert result.details is not None
 
-    # normalized residual = normal_misfit / max_abs(normal_misfit)
-    # FOPR real 0 normal_misfit: (100-150)/10 = -5
-    # FOPR real 1 normal_misfit: (200-150)/10 = 5
-    # TOT real 0 normal_misfit: (1.8e6-2e6)/1e5 = -2
-    # TOT real 1 normal_misfit: (2.2e6-2e6)/1e5 = 2
-    # Overall max abs = 5.
-    # FOPR 0: -5 / 5 = -1.0
-    # FOPR 1: 5 / 5 = 1.0
-    # TOT 0: -2 / 5 = -0.4
-    # TOT 1: 2 / 5 = 0.4
-    # Mean of normalized residuals is exactly 0.0 because of the symmetry
-    assert abs(result.average_normalized_misfit - 0.0) < 1e-6
+    # misfit = sign(m) * m^2
+    # FOPR real 0 normal_misfit: (100-150)/10 = -5 -> misfit = -25
+    # FOPR real 1 normal_misfit: (200-150)/10 = 5 -> misfit = 25
+    # TOT real 0 normal_misfit: (1.8e6-2e6)/1e5 = -2 -> misfit = -4
+    # TOT real 1 normal_misfit: (2.2e6-2e6)/1e5 = 2 -> misfit = 4
+    # Mean of misfits is exactly 0.0 because of the symmetry
+    assert abs(result.average_misfit - 0.0) < 1e-6
 
     details = result.details
     assert len(details) == 2
     for d in details:
         if d.response == "FOPR":
             assert abs(d.absolute_residual - 50.0) < 1e-6
-            # Average normalized residual for FOPR is (-1.0 + 1.0)/2 = 0
-            assert abs(d.normalized_misfit - 0.0) < 1e-6
+            # Average misfit for FOPR is (-25.0 + 25.0)/2 = 0
+            assert abs(d.misfit - 0.0) < 1e-6
             assert abs(d.absolute_misfit - 5.0) < 1e-6
         elif d.response == "TOTAL_VOL":
             assert abs(d.absolute_residual - 200000.0) < 1e-6
-            # Average normalized residual for TOT is (-0.4 + 0.4)/2 = 0
-            assert abs(d.normalized_misfit - 0.0) < 1e-6
+            # Average misfit for TOT is (-4.0 + 4.0)/2 = 0
+            assert abs(d.misfit - 0.0) < 1e-6
             assert abs(d.absolute_misfit - 2.0) < 1e-6
 
     cache_file = iter_dir / "observation_summary.json"
@@ -109,4 +104,4 @@ def test_get_observation_summary_calculates_and_caches(
         "dict[str, typing.Any]",
         json.loads(cache_file.read_text()),
     )
-    assert abs(cached_data["average_normalized_misfit"] - 0.0) < 1e-6
+    assert abs(cached_data["average_misfit"] - 0.0) < 1e-6

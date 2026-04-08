@@ -463,9 +463,7 @@ class ExperimentOrchestrator:
                         self._execution_id,
                         i,
                     )
-                    misfit = (
-                        summary_data.average_normalized_misfit if summary_data else 0.0
-                    )
+                    misfit = summary_data.average_misfit if summary_data else 0.0
                     prior_var = self._calculate_variance(prior_df)
 
                     # perform_update returns a Wide DataFrame
