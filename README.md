@@ -27,14 +27,30 @@ GERT operates as a distributed system comprised of distinct, strictly bounded se
 *(For detailed module boundaries and design constraints, please read the [Architecture](docs/developers/architecture.md) and [Design Rules](docs/developers/design_rules.md) documents).*
 
 ## 🛠 AI-Assisted Development
+
+GERT is developed using a **"Documentation as Code"** philosophy. To ensure AI agents adhere to the strict architectural boundaries and clean-room design, specialized context is provided for both Aider and Gemini CLI.
+
+### 1. Gemini CLI (Agentic Skills)
+This repository includes a set of pre-packaged "Skills" that transform Gemini CLI into a GERT expert. These skills use progressive disclosure to provide the agent with only the relevant documentation it needs for a specific task.
+
+**Installation:**
+To enable GERT-aware logic in your local Gemini session, run the following from the repository root:
+```bash
+# Install the core architectural and implementation skills
+gemini skills install ./skills/gert-architect --scope workspace
+gemini skills install ./skills/gert-enif-expert --scope workspace
+gemini skills install ./skills/gert-tui-developer --scope workspace
+
+# Reload the session to activate
+/skills reload
+```
+Once installed, Gemini will automatically stay within GERT's architectural boundaries and follow the strict `polars`/`pydantic` coding rules defined in `GEMINI.md`.
+
+### 2. Aider (Legacy Context Booting)
+If using Aider, boot the session with the full developer documentation to ensure architectural compliance:
 ```bash
 aider --message-file docs/developers/repo_context.md --read docs/developers/*
 ```
-
-GERT is developed using a **"Documentation as Prompts"** philosophy. To ensure the AI agent (Aider) adheres to the strict architectural boundaries and clean-room design, you must boot it with the project's full context.
-
-### 1. Booting the Agent
-To start a coding session, run the following command from the repository root. This loads the core directives and all developer-facing design documents into the agent's active memory:
 
 ### 2. Development Workflow (TDD)
 The AI agent is instructed to follow a strict Test-Driven Development loop. Follow the roadmap in docs/developers/roadmap.md using these three steps:
