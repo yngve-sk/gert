@@ -225,6 +225,7 @@ class MonitorDashboardScreen(Screen[None]):
         with Horizontal(id="bottom-pane"):
             yield NavigationTree(
                 f"Experiment {self.experiment_id} ({self.execution_id})",
+                data=NodeData(node_type="experiment", iteration=-1),
                 id="tree-view",
             )
             yield ResponseViewer(
@@ -507,8 +508,14 @@ class GertMonitorApp(App[None]):
             f"iter={scope_node.iteration}",
         )
 
-        # We only plot for iteration level and below
-        if scope_node.node_type not in {"iteration", "update", "realization", "step"}:
+        # We only plot for iteration level and below, plus full experiment
+        if scope_node.node_type not in {
+            "experiment",
+            "iteration",
+            "update",
+            "realization",
+            "step",
+        }:
             logger.warning(
                 f"Plotting not supported for node type: {scope_node.node_type}",
             )
@@ -521,6 +528,7 @@ class GertMonitorApp(App[None]):
                 experiment_id=self.experiment_id,
                 execution_id=self.execution_id,
                 scope_node=scope_node,
+                total_iterations=self.num_iterations,
             )
             self.push_screen(screen)
             logger.info("PlotterScreen pushed successfully")

@@ -24,6 +24,22 @@
         "random_seed": 1,
         "neighbor_propagation_order": 1
       }
+    },
+    {
+      "name": "step_1",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 1,
+        "neighbor_propagation_order": 1
+      }
+    },
+    {
+      "name": "step_1",
+      "algorithm": "enif_update",
+      "arguments": {
+        "random_seed": 1,
+        "neighbor_propagation_order": 1
+      }
     }
   ],
   "queue_config": {
