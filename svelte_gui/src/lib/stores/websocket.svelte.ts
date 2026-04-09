@@ -20,9 +20,14 @@ export class ExecutionWebSocketStore {
 	isConnected = $state(false);
 	error = $state<string | null>(null);
 
-	constructor(experimentId: string, executionId: string) {
+	constructor(
+		experimentId: string,
+		executionId: string,
+		initialStatus: RealizationStatus[] = [],
+	) {
 		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 		this.url = `${protocol}//${window.location.host}/experiments/${experimentId}/executions/${executionId}/events`;
+		this.statusEvents = initialStatus;
 	}
 
 	connect() {

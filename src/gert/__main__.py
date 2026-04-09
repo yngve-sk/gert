@@ -2,10 +2,12 @@
 """GERT Command Line Interface."""
 
 import argparse
+import contextlib
 import json
 import logging
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -186,6 +188,34 @@ def _poll_for_completion(
         time.sleep(0.1)
 
 
+def _move_logs(config_data: dict[str, Any], config_id: str) -> None:
+    """Move global logs/ directory to permanent storage for a specific experiment."""
+    logs_dir = Path("logs")
+    if not (logs_dir.exists() and logs_dir.is_dir()):
+        return
+
+    try:
+        storage_base = config_data.get("storage_base", "permanent_storage")
+        dest_dir = (
+            Path(config_data.get("base_working_directory", "."))
+            / storage_base
+            / config_id
+            / "logs"
+        )
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        for item in logs_dir.iterdir():
+            shutil.copy2(item, dest_dir / item.name)
+            item.unlink()
+
+        with contextlib.suppress(OSError):
+            logs_dir.rmdir()
+
+        print(f"Moved logs to {dest_dir}")
+    except OSError as e:
+        log.warning("Could not move logs: %s", e)
+
+
 def run_experiment(
     config_path: Path,
     api_url: str | None,
@@ -201,74 +231,70 @@ def run_experiment(
     try:
         server_process, resolved_api_url = _ensure_server(client, api_url)
         print(f"Submitting '{config_path}' to GERT server at {resolved_api_url}...")
-        try:
-            # 1. Register the experiment
-            response = client.post("/experiments", json=config_data)
-            response.raise_for_status()
-            config_id = response.json()["id"]
-            print(f"✅ Experiment registered (Config ID: {config_id})")
 
-            # 2. Start the execution
-            response = client.post(f"/experiments/{config_id}/start")
-            response.raise_for_status()
-            res_json = response.json()
-            execution_id = res_json["execution_id"]
-            num_iterations = len(config_data.get("updates", [])) + 1
-            print(
-                f"✅ Execution started (Execution ID: {execution_id}, "
-                f"Total Iterations: {num_iterations})",
+        # 1. Register the experiment
+        response = client.post("/experiments", json=config_data)
+        response.raise_for_status()
+        config_id = response.json()["id"]
+        print(f"✅ Experiment registered (Config ID: {config_id})")
+
+        # 2. Start the execution
+        response = client.post(f"/experiments/{config_id}/start")
+        response.raise_for_status()
+        res_json = response.json()
+        execution_id = res_json["execution_id"]
+        num_iterations = len(config_data.get("updates", [])) + 1
+        print(
+            f"✅ Execution started (Execution ID: {execution_id}, "
+            f"Total Iterations: {num_iterations})",
+        )
+
+        # Inject API URL and Auth Token into forward model arguments
+        connection_info = find_gert_server()
+        for step in config_data["forward_model_steps"]:
+            step["args"].extend(
+                [
+                    "--api-url",
+                    connection_info.base_url,
+                    "--auth-token",
+                    connection_info.token,
+                ],
             )
 
-            # Inject API URL and Auth Token into forward model arguments
-            connection_info = find_gert_server()
-            for step in config_data["forward_model_steps"]:
-                step["args"].extend(
-                    [
-                        "--api-url",
-                        connection_info.base_url,
-                        "--auth-token",
-                        connection_info.token,
-                    ],
-                )
-
-            if monitor:
-                start_monitor(
-                    resolved_api_url,
-                    config_id,
-                    execution_id,
-                )
-            elif server_process is not None or wait_for_completion:
-                expected_count = _get_expected_realizations(config_data)
-                _poll_for_completion(
-                    client,
-                    config_id,
-                    execution_id,
-                    num_iterations,
-                    expected_count,
-                )
-            else:
-                last_it = num_iterations - 1
-                print("\nExperiment is running in the background.")
-                print("You can query the consolidated responses using:")
-                print(
-                    f"  curl "
-                    f"{resolved_api_url}/experiments/{config_id}/executions/{execution_id}"
-                    f"/ensembles/{last_it}/responses",
-                )
-
-        except httpx.ConnectError:
-            print(
-                f"❌ Connection error: Could not connect to GERT server at "
-                f"{resolved_api_url}.",
-                file=sys.stderr,
+        if monitor:
+            start_monitor(resolved_api_url, config_id, execution_id)
+        elif server_process is not None or wait_for_completion:
+            expected_count = _get_expected_realizations(config_data)
+            _poll_for_completion(
+                client,
+                config_id,
+                execution_id,
+                num_iterations,
+                expected_count,
             )
-            sys.exit(1)
-        except httpx.HTTPStatusError as e:
+        else:
+            last_it = num_iterations - 1
+            print("\nExperiment is running in the background.")
+            print("You can query the consolidated responses using:")
             print(
-                f"❌ API error ({e.response.status_code}): {e.response.text}",
-                file=sys.stderr,
+                f"  curl "
+                f"{resolved_api_url}/experiments/{config_id}/executions/{execution_id}"
+                f"/ensembles/{last_it}/responses",
             )
-            sys.exit(1)
+
+    except httpx.ConnectError:
+        print(
+            f"❌ Connection error: Could not connect to GERT server at "
+            f"{resolved_api_url}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except httpx.HTTPStatusError as e:
+        print(
+            f"❌ API error ({e.response.status_code}): {e.response.text}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     finally:
         client.close()
@@ -276,6 +302,9 @@ def run_experiment(
             print("Shutting down temporary server...")
             server_process.terminate()
             server_process.wait()
+
+            if "config_data" in locals() and "config_id" in locals():
+                _move_logs(config_data, config_id)
 
 
 def handle_connection_info() -> None:
@@ -572,36 +601,75 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _recursive_scan(paths: list[Path]) -> list[tuple[Path, ExperimentConfig]]:
+    """Helper for recursive scanning of configuration files."""
+    found: list[tuple[Path, ExperimentConfig]] = []
+    for path in paths:
+        if path.is_file() and path.suffix == ".json":
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+
+                if not isinstance(config_data, dict) or "name" not in config_data:
+                    continue
+
+                if config_data.get("base_working_directory") in {None, ".", ""}:
+                    config_data["base_working_directory"] = str(
+                        path.parent.resolve(),
+                    )
+
+                config = ExperimentConfig.model_validate(config_data)
+                found.append((path, config))
+            except (ValidationError, ValueError, json.JSONDecodeError):
+                continue
+        elif path.is_dir():
+            if path.name in {
+                "permanent_storage",
+                "workdirs",
+                ".git",
+                ".venv",
+                "__pycache__",
+                ".pytest_cache",
+                ".ruff_cache",
+                ".mypy_cache",
+            }:
+                continue
+            found.extend(_recursive_scan(list(path.iterdir())))
+    return found
+
+
+def _resolve_ids_and_handle_collisions(
+    found: list[tuple[Path, ExperimentConfig]],
+) -> dict[str, ExperimentConfig]:
+    """Helper to resolve IDs and handle name collisions."""
+    configs: dict[str, ExperimentConfig] = {}
+    name_counts: dict[str, int] = {}
+    for _, config in found:
+        name_counts[config.name] = name_counts.get(config.name, 0) + 1
+
+    for path, config in found:
+        if name_counts[config.name] > 1:
+            # Collision! Prefix with parent folder name
+            exp_id = f"{path.parent.name}_{config.name}"
+        else:
+            exp_id = config.name
+
+        # Final safety check for absolute duplicates (same ID)
+        if exp_id in configs:
+            base_id = exp_id
+            counter = 1
+            while exp_id in configs:
+                exp_id = f"{base_id}_{counter}"
+                counter += 1
+
+        configs[exp_id] = config
+    return configs
+
+
 def _scan_for_configs(paths: list[Path]) -> dict[str, ExperimentConfig]:
     """Recursively scan paths for GERT configuration files."""
-    configs: dict[str, ExperimentConfig] = {}
-    for path in paths:
-        if path.is_file():
-            if path.suffix == ".json":
-                try:
-                    # Inject base_working_directory to match the scanned file's location
-                    with path.open("r", encoding="utf-8") as f:
-                        config_data = json.load(f)
-
-                    if (
-                        "base_working_directory" not in config_data
-                        or config_data["base_working_directory"] == "."
-                    ):
-                        config_data["base_working_directory"] = str(
-                            path.parent.resolve(),
-                        )
-
-                    config = ExperimentConfig.model_validate(config_data)
-                    # ID equals parent folder and config name
-                    # Using underscore to avoid routing issues with slashes
-                    exp_id = f"{path.parent.name}_{config.name}"
-                    configs[exp_id] = config
-                except (ValidationError, ValueError, json.JSONDecodeError):
-                    continue
-        elif path.is_dir():
-            # Recursively scan directory
-            configs.update(_scan_for_configs(list(path.iterdir())))
-    return configs
+    found = _recursive_scan(paths)
+    return _resolve_ids_and_handle_collisions(found)
 
 
 def _handle_ui_command(args: argparse.Namespace) -> None:

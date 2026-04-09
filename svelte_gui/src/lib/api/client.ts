@@ -6,6 +6,7 @@ export interface Experiment {
 export interface ExperimentConfig {
 	name: string;
 	base_working_directory: string;
+	updates?: any[];
 	// Omitted other fields for brevity as we mainly need the name right now
 }
 
@@ -148,14 +149,31 @@ export function getParametersUrl(
 }
 
 /**
+ * Fetch the status of all realizations for a specific execution.
+ */
+export async function getExecutionStatus(
+	experimentId: string,
+	executionId: string,
+	fetchInstance: typeof fetch = fetch,
+): Promise<any[]> {
+	const response = await fetchInstance(
+		`/experiments/${experimentId}/executions/${executionId}/status`,
+	);
+	if (!response.ok) {
+		throw new Error(`Failed to fetch execution status: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
  * Start a new execution for an experiment.
  */
 export async function startExperiment(
 	experimentId: string,
-	fetchInstance: typeof fetch = fetch
+	fetchInstance: typeof fetch = fetch,
 ): Promise<{ execution_id: string; iteration: number }> {
 	const response = await fetchInstance(`/experiments/${experimentId}/start`, {
-		method: "POST"
+		method: "POST",
 	});
 	if (!response.ok) {
 		throw new Error(`Failed to start experiment: ${response.statusText}`);
