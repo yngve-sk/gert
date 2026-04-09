@@ -38,6 +38,7 @@
 	"dependencies": {
 		"@fontsource/jetbrains-mono": "^5.2.8",
 		"@skeletonlabs/skeleton": "^4.15.1",
-		"@skeletonlabs/skeleton-svelte": "^4.15.1"
+		"@skeletonlabs/skeleton-svelte": "^4.15.1",
+		"uplot": "^1.6.32"
 	}
 }
