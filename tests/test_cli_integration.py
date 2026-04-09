@@ -180,9 +180,15 @@ def test_explicit_server_multiple_experiments(
             print("\n--- Server STDERR ---\n", server_process.stderr.read())
 
 
+@pytest.fixture
+def slow_example_dir(copy_example: Callable[[str], Path]) -> Path:
+    """Fixture to copy the slow example into a temporary directory."""
+    return copy_example("slow")
+
+
 def test_implicit_server_isolation(
     monkeypatch: pytest.MonkeyPatch,
-    simple_example_dir: Path,
+    slow_example_dir: Path,
     tmp_path: Path,
 ) -> None:
     """
@@ -192,7 +198,7 @@ def test_implicit_server_isolation(
     3. Waits for the run to complete.
     4. Confirms the temporary server has been shut down and is no longer discoverable.
     """
-    config_path = simple_example_dir / "experiment.json"
+    config_path = slow_example_dir / "experiment.json"
     discovery_dir = tmp_path / "gert_discovery"
     discovery_dir.mkdir()
 
