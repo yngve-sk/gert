@@ -146,3 +146,19 @@ export function getParametersUrl(
 ): string {
 	return `/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/parameters`;
 }
+
+/**
+ * Start a new execution for an experiment.
+ */
+export async function startExperiment(
+	experimentId: string,
+	fetchInstance: typeof fetch = fetch
+): Promise<{ execution_id: string; iteration: number }> {
+	const response = await fetchInstance(`/experiments/${experimentId}/start`, {
+		method: "POST"
+	});
+	if (!response.ok) {
+		throw new Error(`Failed to start experiment: ${response.statusText}`);
+	}
+	return response.json();
+}
