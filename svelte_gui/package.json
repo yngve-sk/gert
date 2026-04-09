@@ -36,7 +36,11 @@
 		"vitest-browser-svelte": "^2.1.0"
 	},
 	"dependencies": {
+		"@deck.gl/core": "^9.2.11",
+		"@deck.gl/layers": "^9.2.11",
 		"@fontsource/jetbrains-mono": "^5.2.8",
+		"@loaders.gl/core": "^4.4.1",
+		"@loaders.gl/parquet": "^4.4.1",
 		"@skeletonlabs/skeleton": "^4.15.1",
 		"@skeletonlabs/skeleton-svelte": "^4.15.1",
 		"uplot": "^1.6.32"

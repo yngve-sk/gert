@@ -5,6 +5,8 @@ import { pauseExecution, resumeExecution } from "$lib/api/client";
 // biome-ignore lint/correctness/noUnusedImports: used in HTML template
 import IterationDashboard from "$lib/components/dashboard/IterationDashboard.svelte";
 // biome-ignore lint/correctness/noUnusedImports: used in HTML template
+import SpatialContainer from "$lib/components/plotting/SpatialContainer.svelte";
+// biome-ignore lint/correctness/noUnusedImports: used in HTML template
 import VirtualizedTerminal from "$lib/components/VirtualizedTerminal.svelte";
 import { ExecutionWebSocketStore } from "$lib/stores/websocket.svelte";
 
@@ -118,8 +120,16 @@ async function handleResume() {
 			<IterationDashboard events={wsStore?.statusEvents || []} />
 		</section>
 
-		<!-- M8 Virtualized Terminal -->
+		<!-- M11 Spatial Analysis -->
 		<section class="bg-surface-800 border border-surface-700 rounded-lg p-4 shadow-lg flex flex-col h-full min-h-[400px] overflow-hidden">
+			<h2 class="text-sm font-bold text-surface-100 mb-2 border-b border-surface-700 pb-2">Spatial Field</h2>
+			<div class="flex-auto overflow-hidden rounded relative">
+				<SpatialContainer />
+			</div>
+		</section>
+
+		<!-- M8 Virtualized Terminal (spanning full width) -->
+		<section class="bg-surface-800 border border-surface-700 rounded-lg p-4 shadow-lg flex flex-col h-full min-h-[400px] overflow-hidden xl:col-span-2">
 			<h2 class="text-sm font-bold text-surface-100 mb-2 border-b border-surface-700 pb-2">Console</h2>
 			<div class="flex-auto overflow-hidden rounded relative">
 				<VirtualizedTerminal />
