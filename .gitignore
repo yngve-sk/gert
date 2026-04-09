@@ -68,3 +68,4 @@ src/gert/version.py
 
 **/*/workdirs
 **/*/permanent_storage
+\n# Gemini Skills\n*.skill
