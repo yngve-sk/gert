@@ -549,6 +549,12 @@ def _parse_args() -> argparse.Namespace:
         description="Connects to the GERT server and opens the web GUI.",
     )
     ui_parser.add_argument(
+        "--api-url",
+        type=str,
+        default=None,
+        help="Explicit URL of the GERT server to connect to (overrides discovery).",
+    )
+    ui_parser.add_argument(
         "--server-id",
         type=str,
         default=None,
@@ -562,15 +568,33 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
     """Launch the Web GUI server and open the browser."""
     logger = logging.getLogger("gert.cli")
 
+    client = httpx.Client()
+    server_process = None
     try:
-        server_info = find_gert_server()
-        url = f"{server_info.base_url}/_app/index.html"
+        # Implicitly discover or start a server
+        server_process, resolved_api_url = _ensure_server(client, args.api_url)
+
+        url = f"{resolved_api_url}/"
         logger.info(f"Opening GERT Web GUI at {url}")
+        print(f"Opening GERT Web GUI at {url}")
+
         webbrowser.open(url)
-    except NoGertServerFoundError:
-        logger.exception("No GERT API server found running.")
-        logger.info("Start a server first using: gert server")
+
+        if server_process:
+            print("Running temporary GERT server. Press Ctrl+C to stop.")
+            # Block until the user kills the process
+            server_process.wait()
+
+    except KeyboardInterrupt:
+        print("\nShutting down GERT UI server...")
+    except Exception:
+        logger.exception("Failed to launch UI")
         sys.exit(1)
+    finally:
+        client.close()
+        if server_process:
+            server_process.terminate()
+            server_process.wait()
 
 
 def main() -> None:
