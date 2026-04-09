@@ -130,3 +130,9 @@ It cross-references the master fault list and deletes the edges where faults exi
 When the algorithm requests distances for any parameter pointing to main_reservoir_grid, the toolkit calculates the shortest path on this pre-broken graph.
 
 Because the heavy topology is cached behind a grid_id pointer, we get all the localization accuracy of the EGRID with zero graph-rebuilding overhead during the update loops.
+
+## N-Dimensional Dataset Optimization (Symlinking)
+To minimize disk I/O and storage overhead when dealing with massive n-dimensional parameter grids (e.g., 3D reservoir models, 2D surfaces) managed via `ParameterDataset`:
+
+1. **Unmodified Priors (Symlink Strategy):** During Iteration 0 (or any step where the parameter matrix has *not* been mathematically updated by an assimilation algorithm), GERT **MUST NOT** copy or rewrite the `.parquet` dataset into every realization's working directory. Instead, the orchestrator must create a relative or absolute **symbolic link** (`os.symlink`) in the realization's workdir pointing to the source dataset file. This is critical for performance, as priors are often static base models or pre-generated shared files.
+2. **Updated Posteriors (Materialized Strategy):** After a Data Assimilation update (e.g., ES-MDA), the parameters diverge and are unique per realization. When injecting these updated parameters, GERT **MUST** physically write out a new, distinct `.parquet` file containing the updated values into the realization's workdir. Symlinking is no longer valid once the data is mathematically modified by the orchestrator.

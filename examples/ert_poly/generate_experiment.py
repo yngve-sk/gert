@@ -34,16 +34,18 @@ def generate_experiment() -> None:
     ]
 
     # We do a few iterations to let the data assimilation update parameters
+    num_updates = 4
+    normalized_weight_per_step = 1.0 / num_updates
     updates = [
         {
             "name": f"step_{i}",
-            "algorithm": "enif_update",
+            "algorithm": "es_update",
             "arguments": {
                 "random_seed": i,
-                "neighbor_propagation_order": 1,
+                "weight": normalized_weight_per_step,
             },
         }
-        for i in range(1, 6)
+        for i in range(1, num_updates + 1)
     ]
 
     experiment = {

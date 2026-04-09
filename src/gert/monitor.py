@@ -14,6 +14,7 @@ from urllib.error import URLError
 import httpx
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
+from rich.markup import escape
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
@@ -1380,7 +1381,7 @@ class GertMonitorApp(App[None]):
             with urllib.request.urlopen(req, timeout=2) as response:  # noqa: S310
                 if response.getcode() == 200:
                     log_data = json.loads(response.read().decode("utf-8"))
-                    content.append(log_data.get(log_type, "(Empty)"))
+                    content.append(escape(log_data.get(log_type, "(Empty)")))
         except (URLError, json.JSONDecodeError, TimeoutError, ConnectionError):
             content.append("[red](Logs not yet available or failed to fetch)[/]")
 
@@ -1426,10 +1427,10 @@ class GertMonitorApp(App[None]):
                     content.extend(
                         [
                             "--- [bold]STDOUT[/] ---",
-                            log_data.get("stdout", "(Empty)"),
+                            escape(log_data.get("stdout", "(Empty)")),
                             "",
                             "--- [bold]STDERR[/] ---",
-                            log_data.get("stderr", "(Empty)"),
+                            escape(log_data.get("stderr", "(Empty)")),
                         ],
                     )
         except (URLError, json.JSONDecodeError, TimeoutError, ConnectionError):

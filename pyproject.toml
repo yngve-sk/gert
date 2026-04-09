@@ -28,6 +28,7 @@ dependencies = [
     "networkx",
     "textual-plot>=0.10.1",
     "httpx",
+    "iterative_ensemble_smoother",
 ]
 
 [project.scripts]
@@ -221,6 +222,8 @@ module = [
     "numpy.*",
     "networkx",
     "networkx.*",
+    "iterative_ensemble_smoother",
+    "iterative_ensemble_smoother.*",
 ]
 ignore_missing_imports = true
 
