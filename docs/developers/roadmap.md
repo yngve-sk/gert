@@ -84,9 +84,11 @@ This document outlines the strategic, phased approach for building GERT (Generic
 **Goal:** Harden the API, handle failures gracefully, and make it ready for a GUI.
 
 * **PR 6.1: Event Streaming (WebSockets)**
-    * Implement `WS /experiments/{id}/events` to broadcast asynchronous state changes.
+    * Implement `WS /experiments/{id}/executions/{exec_id}/events` to broadcast asynchronous state changes in real-time. This replaces HTTP polling for TUIs/GUIs.
 * **PR 6.2: Blocking Cancellation**
-    * Implement `POST /experiments/{id}/stop` ensuring active `psij-python` job termination before returning.
-* **PR 6.3: Ephemeral Security & Lifecycle**
+    * Implement `POST /experiments/{id}/executions/{exec_id}/cancel` (or `/stop`), ensuring active `psij-python` jobs in the local/cluster queue are hard-killed before returning.
+* **PR 6.3: Data Pagination & Slicing**
+    * Update analytical GET endpoints (`/parameters`, `/responses`) to accept query parameters (e.g., `?realization=5`, `?columns=surface_param`). Use Polars lazy evaluation to slice the Parquet files on the backend *before* streaming, preventing frontend OOM on massive reservoirs.
+* **PR 6.4: Ephemeral Security & Lifecycle**
     * Implement `SecurityContext` to generate `connection.json` with dynamic ports and strict POSIX permissions.
     * Implement robust signal handling (`SIGTERM`, `SIGINT`) to guarantee file deletion on shutdown.
