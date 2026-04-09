@@ -5,6 +5,8 @@ import pathlib
 import socket
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from gert.server.models import ConnectionInfo
 from gert.server.router import router
@@ -43,6 +45,26 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
     )
     gert_server_app.state.connection_info = conn_info
     gert_server_app.include_router(router)
+
+    # M12: Mount the compiled SvelteKit GUI
+    static_dir = pathlib.Path(__file__).parent / "static"
+    if static_dir.exists() and (static_dir / "index.html").exists():
+        gert_server_app.mount(
+            "/_app",
+            StaticFiles(directory=str(static_dir / "_app")),
+            name="app",
+        )
+
+        @gert_server_app.get("/{full_path:path}")
+        async def serve_svelte_gui(full_path: str) -> FileResponse | None:
+            """Serve the SvelteKit SPA fallback."""
+            # Ensure API paths fall through
+            if full_path.startswith(("experiments", "logs")):
+                return None
+            physical_path = static_dir / full_path
+            if physical_path.is_file():
+                return FileResponse(physical_path)
+            return FileResponse(static_dir / "index.html")
 
     return gert_server_app
 
