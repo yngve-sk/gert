@@ -6,6 +6,7 @@ import json
 import logging
 import traceback
 from collections import defaultdict
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -15,6 +16,8 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi import Path as FastApiPath
@@ -147,6 +150,54 @@ class ServerState:
         self.consolidation_tasks.clear()
         self.experiment_run_counts.clear()
         self.latest_execution_id.clear()
+
+
+class ConnectionManager:
+    """Manages active WebSocket connections per (experiment_id, execution_id)."""
+
+    def __init__(self) -> None:
+        """Initialize the ConnectionManager."""
+        self.active_connections: dict[tuple[str, str], list[WebSocket]] = defaultdict(
+            list,
+        )
+        self.active_broadcasts: set[asyncio.Task[Any]] = set()
+
+    def register(
+        self,
+        websocket: WebSocket,
+        experiment_id: str,
+        execution_id: str,
+    ) -> None:
+        """Register an already accepted connection."""
+        self.active_connections[experiment_id, execution_id].append(websocket)
+
+    def disconnect(
+        self,
+        websocket: WebSocket,
+        experiment_id: str,
+        execution_id: str,
+    ) -> None:
+        """Remove connection."""
+        conns = self.active_connections.get((experiment_id, execution_id))
+        if conns and websocket in conns:
+            conns.remove(websocket)
+
+    async def broadcast(
+        self,
+        experiment_id: str,
+        execution_id: str,
+        message: dict[str, Any],
+    ) -> None:
+        """Send message to all connections for an execution."""
+        connections = self.active_connections.get((experiment_id, execution_id), [])
+        for connection in list(connections):
+            try:
+                await connection.send_json(message)
+            except Exception:  # noqa: BLE001
+                self.disconnect(connection, experiment_id, execution_id)
+
+
+manager = ConnectionManager()
 
 
 def _rebuild_state_from_log(
@@ -335,6 +386,41 @@ async def pause_execution(
 
 
 @router.post(
+    "/experiments/{experiment_id}/executions/{execution_id}/cancel",
+    summary="Cancel an active execution",
+    description="Halts the orchestrator macro loop and cancels all running jobs.",
+)
+async def cancel_execution(
+    experiment_id: str,
+    execution_id: str,
+) -> dict[str, str]:
+    """Cancel an active execution.
+
+    Raises:
+        HTTPException: if execution was not found.
+    """
+    config = _recover_execution(experiment_id, execution_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+
+    server_state = ServerState.get()
+    exec_data = server_state.executions.get(execution_id)
+    if exec_data and exec_data.orchestrator:
+        exec_data.orchestrator.cancel_execution()
+    elif exec_data and exec_data.overarching_status not in {
+        "CANCELED",
+        "COMPLETED",
+        "FAILED",
+    }:
+        _update_realization_status(execution_id, -1, -1, "CANCELED")
+
+    return {"status": "success"}
+
+
+@router.post(
     "/experiments/{experiment_id}/executions/{execution_id}/resume",
     summary="Resume a paused or crashed execution",
     description="Reads the state from permanent storage and resumes the orchestrator.",
@@ -406,7 +492,9 @@ async def resume_execution(
     async def _run_wrapped() -> None:
         try:
             await orchestrator.run_experiment()
-            if orchestrator.is_paused:
+            if getattr(orchestrator, "is_cancelled", False):
+                _update_realization_status(execution_id, -1, -1, "CANCELED")
+            elif orchestrator.is_paused:
                 status_str = "PAUSED" if orchestrator.is_force_paused else "PAUSING"
                 _update_realization_status(execution_id, -1, -1, status_str)
             else:
@@ -424,6 +512,38 @@ async def resume_execution(
     task.add_done_callback(server_state.consolidation_tasks.discard)
 
     return {"status": "success"}
+
+
+@router.websocket("/experiments/{experiment_id}/executions/{execution_id}/events")
+async def websocket_events(
+    websocket: WebSocket,
+    experiment_id: str,
+    execution_id: str,
+) -> None:
+    """WebSocket endpoint for realtime execution events."""
+    await websocket.accept()
+
+    # Replay history
+    config = _ensure_config_loaded(experiment_id)
+    if config:
+        base = config.storage_base
+        events_file = base / experiment_id / execution_id / "status_events.jsonl"
+        if events_file.exists():
+            try:
+                with events_file.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            await websocket.send_json(json.loads(line))
+            except Exception:
+                logger.exception("Error replaying status events")
+
+    manager.register(websocket, experiment_id, execution_id)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, experiment_id, execution_id)
 
 
 @router.get(
@@ -573,7 +693,10 @@ async def start_experiment(
         try:
             await orchestrator.run_experiment()
 
-            if getattr(orchestrator, "is_paused", False):
+            if getattr(orchestrator, "is_cancelled", False):
+                exec_data.overarching_status = "CANCELED"
+                _update_realization_status(execution_id, -1, -1, "CANCELED")
+            elif getattr(orchestrator, "is_paused", False):
                 exec_data.overarching_status = "PAUSED"
                 _update_realization_status(execution_id, -1, -1, "PAUSED")
             else:
@@ -967,6 +1090,14 @@ def _update_realization_status(
     except Exception:
         logger.exception("Failed to write status event to disk")
 
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(manager.broadcast(experiment_id, execution_id, event))
+        manager.active_broadcasts.add(task)
+        task.add_done_callback(manager.active_broadcasts.discard)
+    except RuntimeError:
+        pass
+
 
 @router.post(
     "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/realizations/{realization_id}/status",
@@ -1095,6 +1226,8 @@ async def get_parameters(
     experiment_id: str,
     execution_id: str,
     iteration: int,
+    columns: Annotated[list[str] | None, Query()] = None,
+    realization: Annotated[int | None, Query()] = None,
 ) -> StreamingResponse:
     """Retrieve the parameter matrix as a Parquet stream.
 
@@ -1114,6 +1247,8 @@ async def get_parameters(
             experiment_id=config.name,
             execution_id=execution_id,
             iteration=iteration,
+            columns=columns,
+            realization=realization,
         )
         buffer = io.BytesIO()
         df.write_parquet(buffer)
@@ -1151,6 +1286,8 @@ async def get_responses(
     experiment_id: str,
     execution_id: str,
     iteration: int,
+    columns: Annotated[list[str] | None, Query()] = None,
+    realization: Annotated[int | None, Query()] = None,
 ) -> StreamingResponse:
     """Retrieve consolidated responses as a Parquet stream.
 
@@ -1170,6 +1307,8 @@ async def get_responses(
             experiment_id=config.name,
             execution_id=execution_id,
             iteration=iteration,
+            columns=columns,
+            realization=realization,
         )
         buffer = io.BytesIO()
         df.write_parquet(buffer)
@@ -1250,3 +1389,110 @@ async def get_observation_summary(
 
     api = StorageAPI(base_storage_path=config.storage_base)
     return api.get_observation_summary(config.name, execution_id, iteration)
+
+
+# ruff: noqa: C901
+@router.get(
+    "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/realizations/{realization_id}/steps/{step_name}/logs/stream",
+    summary="Stream step execution logs",
+    description="Streams the stdout or stderr logs for a specific forward model step.",
+)
+async def stream_step_logs(
+    experiment_id: str,
+    execution_id: str,
+    iteration: int,
+    realization_id: int,
+    step_name: str,
+    log_type: Annotated[str, Query(description="stdout or stderr")] = "stdout",
+) -> StreamingResponse:
+    """Stream logs for a specific forward model step.
+
+    Raises:
+        HTTPException: If execution is not found.
+    """
+    config = _recover_execution(experiment_id, execution_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+
+    # 1. Check permanent storage
+    base_storage = config.storage_base or Path("./permanent_storage")
+    perm_log = (
+        base_storage
+        / experiment_id
+        / execution_id
+        / f"iter-{iteration}"
+        / "logs"
+        / f"realization-{realization_id}"
+        / f"{step_name}.{log_type}"
+    )
+
+    if perm_log.exists():
+        # Already finished, just stream the file once and exit
+        async def _stream_file() -> AsyncGenerator[str]:
+            with perm_log.open("r", encoding="utf-8") as f:
+                while chunk := f.read(4096):
+                    yield chunk
+                    await asyncio.sleep(0.01)  # Yield loop control
+
+        return StreamingResponse(_stream_file(), media_type="text/plain")
+
+    # 2. Not in permanent storage. Check active workdir
+    workdir_base = config.realization_workdirs_base or Path("./workdirs")
+    workdir = (
+        workdir_base
+        / experiment_id
+        / execution_id
+        / f"iter-{iteration}"
+        / f"realization-{realization_id}"
+    )
+    active_log = workdir / f"{step_name}.{log_type}"
+
+    async def _tail_file() -> AsyncGenerator[str]:
+        # Wait up to 10 seconds for the file to be created
+        for _ in range(20):
+            if active_log.exists() or perm_log.exists():
+                break
+            await asyncio.sleep(0.5)
+
+        if perm_log.exists():
+            with perm_log.open("r", encoding="utf-8") as f:
+                while chunk := f.read(4096):
+                    yield chunk
+                    await asyncio.sleep(0.01)
+            return
+
+        if not active_log.exists():
+            yield f"Log file not found after waiting: {active_log}\n"
+            return
+
+        with active_log.open("r", encoding="utf-8") as f:
+            while True:
+                chunk = f.read(4096)
+                if chunk:
+                    yield chunk
+                else:
+                    # Check if step finished by checking if perm_log was created
+                    if perm_log.exists():
+                        # Read any remaining bytes that might have been flushed
+                        chunk = f.read()
+                        if chunk:
+                            yield chunk
+                        break
+
+                    # Also check if execution is completely gone
+                    server_state = ServerState.get()
+                    exec_data = server_state.executions.get(execution_id)
+                    is_done = not exec_data or exec_data.overarching_status in {
+                        "COMPLETED",
+                        "FAILED",
+                        "CANCELED",
+                    }
+                    if is_done:
+                        break
+
+                    await asyncio.sleep(0.5)
+
+    return StreamingResponse(_tail_file(), media_type="text/plain")

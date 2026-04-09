@@ -135,6 +135,66 @@ def test_get_parameters_unrolls_spatial_schemas(
     assert list(poro_list_0) == [0.1, 0.2, 0.3]
 
 
+def test_get_parameters_filtering_and_selection(
+    api: StorageAPI,
+    storage_path: Path,
+) -> None:
+    """Prove that get_parameters correctly applies realization filter and column selection."""
+    exp_id = "test_params_filter"
+    exec_id = "run_1"
+    iter_nr = 0
+    iter_dir = storage_path / exp_id / exec_id / f"iter-{iter_nr}"
+    iter_dir.mkdir(parents=True)
+    param_dir = iter_dir / "parameters"
+    param_dir.mkdir()
+
+    scalars_df = pl.DataFrame(
+        {
+            "realization": [0, 1],
+            "fault_mult": [0.5, 0.8],
+            "permeability": [100.0, 150.0],
+        },
+    )
+    scalars_df.write_parquet(param_dir / "scalar.parquet")
+
+    grid_df = pl.DataFrame(
+        {
+            "realization": [0, 0, 1, 1],
+            "x": [0, 1, 0, 1],
+            "porosity": [0.1, 0.2, 0.3, 0.4],
+        },
+    )
+    grid_df.write_parquet(param_dir / "grid.parquet")
+
+    # 1. Filter by realization
+    res_realization = api.get_parameters(exp_id, exec_id, iter_nr, realization=1)
+    assert len(res_realization) == 1
+    assert res_realization["realization"][0] == 1
+    assert res_realization["fault_mult"][0] == 0.8
+    assert list(res_realization["porosity"][0]) == [0.3, 0.4]
+
+    # 2. Select specific columns
+    res_columns = api.get_parameters(exp_id, exec_id, iter_nr, columns=["permeability"])
+    assert "realization" in res_columns.columns
+    assert "permeability" in res_columns.columns
+    assert "fault_mult" not in res_columns.columns
+    assert "porosity" not in res_columns.columns
+
+    # 3. Both filter and select on spatial
+    res_both = api.get_parameters(
+        exp_id,
+        exec_id,
+        iter_nr,
+        columns=["porosity"],
+        realization=0,
+    )
+    assert len(res_both) == 1
+    assert "realization" in res_both.columns
+    assert "porosity" in res_both.columns
+    assert "fault_mult" not in res_both.columns
+    assert list(res_both["porosity"][0]) == [0.1, 0.2]
+
+
 def test_write_parameters_uses_spatial_templates(
     api: StorageAPI,
     storage_path: Path,

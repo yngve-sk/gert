@@ -5,6 +5,7 @@ import pathlib
 import socket
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from gert.server.models import ConnectionInfo
 from gert.server.router import router
@@ -41,6 +42,15 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
         description="Generic Ensemble Reservoir Tool orchestration API.",
         version="0.1.0",
     )
+
+    gert_server_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     gert_server_app.state.connection_info = conn_info
     gert_server_app.include_router(router)
 

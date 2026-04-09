@@ -156,6 +156,7 @@ class ExperimentOrchestrator:
 
         self._pause_requested = False
         self._force_pause = False
+        self._cancel_requested = False
         self._pause_event = asyncio.Event()
 
     def _reconstruct_state_from_log(self) -> None:
@@ -221,6 +222,19 @@ class ExperimentOrchestrator:
             for job_id in self._active_jobs[self._current_iteration].values():
                 self._job_submitter.cancel(job_id)
 
+    def cancel_execution(self) -> None:
+        """Cancel the experiment execution.
+
+        Sets `_cancel_requested` to True, triggers the `_pause_event` to unblock
+        waiting loops, and cancels all active jobs in the current iteration.
+        """
+        self._cancel_requested = True
+        self._pause_event.set()
+
+        # Cancel all active jobs in the current iteration
+        for job_id in list(self._active_jobs[self._current_iteration].values()):
+            self._job_submitter.cancel(job_id)
+
     @property
     def is_paused(self) -> bool:
         return self._pause_requested
@@ -228,6 +242,10 @@ class ExperimentOrchestrator:
     @property
     def is_force_paused(self) -> bool:
         return self._force_pause
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self._cancel_requested
 
     def _ensure_iteration_state(self, iteration: int) -> None:
         """Ensure state structures exist for a given iteration."""
@@ -381,7 +399,7 @@ class ExperimentOrchestrator:
         consolidation_tasks: set[asyncio.Task[Any]] = set()
 
         for i in range(self._current_iteration, num_updates + 1):
-            if self._pause_requested:
+            if self._pause_requested or self._cancel_requested:
                 break
 
             self._current_iteration = i
@@ -416,7 +434,7 @@ class ExperimentOrchestrator:
             await self._wait_for_iteration(i)
             logger.info(f"All realizations for iteration {i} completed.")
 
-            if self._pause_requested:
+            if self._pause_requested or self._cancel_requested:
                 break
 
             # 3. Flush storage and cancel the watching task for this iteration
@@ -555,7 +573,7 @@ class ExperimentOrchestrator:
         for r_id in sorted(realizations):
             if r_id in skip_realizations:
                 continue
-            if self._pause_requested:
+            if self._pause_requested or self._cancel_requested:
                 break
             job_id = self.evaluate_forward_model(r_id, iteration, parameters)
             self._active_jobs[iteration][r_id] = job_id
@@ -858,15 +876,19 @@ class ExperimentOrchestrator:
         for task in pending:
             task.cancel()
 
-        if self._force_pause:
+        if self._force_pause or self._cancel_requested:
             return
 
         # If graceful pause, wait for remaining to finish
-        if self._pause_event.is_set() and not self._force_pause:
+        if (
+            self._pause_event.is_set()
+            and not self._force_pause
+            and not self._cancel_requested
+        ):
             await self._iteration_events[iteration].wait()
 
-        # If not forcefully paused, check if there were failures
-        if not self._force_pause:
+        # If not forcefully paused or cancelled, check if there were failures
+        if not self._force_pause and not self._cancel_requested:
             num_success = len(self._successful_realizations[iteration])
             num_failed = len(self._failed_realizations[iteration])
             num_total = self._expected_realizations.get(iteration, 0)
