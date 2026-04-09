@@ -59,6 +59,10 @@ version-file = "src/gert/version.py"
 [tool.hatch.build.targets.sdist]
 include = ["/src", "/tests"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/gert"]
+artifacts = ["src/gert/server/static/**/*"]
+
 # The [tool.setuptools] and [tool.setuptools_scm] sections are no longer needed and should be deleted.
 
 [tool.pytest.ini_options]
