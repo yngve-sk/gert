@@ -543,12 +543,16 @@ def _parse_args() -> argparse.Namespace:
     conn_subparsers.add_parser("wait", help="Wait for server to become available")
 
     # GUI Command
-    ui_parser = subparsers.add_parser("ui", help="Launch the GERT Web GUI")
+    ui_parser = subparsers.add_parser(
+        "ui",
+        help="Launch the GERT Web GUI",
+        description="Connects to the GERT server and opens the web GUI.",
+    )
     ui_parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port for the server to bind to (default: 8000)",
+        "--server-id",
+        type=str,
+        default=None,
+        help="Server ID to connect to (if not provided, uses the first found server).",
     )
 
     return parser.parse_args()
@@ -557,17 +561,16 @@ def _parse_args() -> argparse.Namespace:
 def _handle_ui_command(args: argparse.Namespace) -> None:
     """Launch the Web GUI server and open the browser."""
     logger = logging.getLogger("gert.cli")
-    url = f"http://127.0.0.1:{args.port}/_app/index.html"
 
-    logger.info(f"Starting GERT Web GUI on {url}")
-
-    # We can launch the browser first since the UI has loading screens/retries
-    webbrowser.open(url)
-
-    # Reuse the server command logic but force the port
-    args.host = "127.0.0.1"
-    args.port = args.port
-    _handle_server_command(args)
+    try:
+        server_info = find_gert_server()
+        url = f"{server_info.base_url}/_app/index.html"
+        logger.info(f"Opening GERT Web GUI at {url}")
+        webbrowser.open(url)
+    except NoGertServerFoundError:
+        logger.exception("No GERT API server found running.")
+        logger.info("Start a server first using: gert server")
+        sys.exit(1)
 
 
 def main() -> None:
