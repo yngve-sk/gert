@@ -134,3 +134,15 @@ export async function getObservationSummary(
 	}
 	return response.json();
 }
+
+/**
+ * Get the URL to stream parameters for a specific iteration as Parquet.
+ * SvelteKit's Vite proxy will forward this to the Python backend automatically.
+ */
+export function getParametersUrl(
+	experimentId: string,
+	executionId: string,
+	iteration: number,
+): string {
+	return `/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/parameters`;
+}
