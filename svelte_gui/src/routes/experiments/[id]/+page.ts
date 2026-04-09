@@ -5,14 +5,24 @@ import {
 } from "$lib/api/client";
 import type { PageLoad } from "./$types";
 
-export const load: PageLoad = async ({ params, fetch }) => {
+export const load: PageLoad = async ({ params, fetch, url }) => {
 	const experimentId = params.id;
 
 	try {
+		const isFastApiMount = url.pathname.includes("/_app/");
+
+		let apiFetch = fetch;
+		if (isFastApiMount) {
+			apiFetch = (input: RequestInfo | URL, init?: RequestInit) => {
+				const targetUrl = new URL(input.toString(), url.origin);
+				return fetch(targetUrl, init);
+			};
+		}
+
 		// Fetch config and executions concurrently
 		const [config, executions] = await Promise.all([
-			getExperimentConfig(experimentId, fetch),
-			listExecutions(experimentId, fetch),
+			getExperimentConfig(experimentId, apiFetch),
+			listExecutions(experimentId, apiFetch),
 		]);
 
 		// To fulfill M10 (Pluggable Plotting), we need observation summary data for convergence plots.
@@ -37,7 +47,7 @@ export const load: PageLoad = async ({ params, fetch }) => {
 							experimentId,
 							latestExecution.execution_id,
 							iter,
-							fetch,
+							apiFetch,
 						);
 						return { iteration: iter, data };
 					} catch (_e) {

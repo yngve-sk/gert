@@ -55,7 +55,7 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
             name="app",
         )
 
-        @gert_server_app.get("/{full_path:path}")
+        @gert_server_app.get("/{full_path:path}", response_model=None)
         async def serve_svelte_gui(full_path: str) -> FileResponse | None:
             """Serve the SvelteKit SPA fallback."""
             # Ensure API paths fall through
