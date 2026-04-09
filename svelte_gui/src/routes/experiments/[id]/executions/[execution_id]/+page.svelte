@@ -3,6 +3,8 @@ import { onDestroy, onMount } from "svelte";
 import { page } from "$app/state";
 import { pauseExecution, resumeExecution } from "$lib/api/client";
 // biome-ignore lint/correctness/noUnusedImports: used in HTML template
+import IterationDashboard from "$lib/components/dashboard/IterationDashboard.svelte";
+// biome-ignore lint/correctness/noUnusedImports: used in HTML template
 import VirtualizedTerminal from "$lib/components/VirtualizedTerminal.svelte";
 import { ExecutionWebSocketStore } from "$lib/stores/websocket.svelte";
 
@@ -54,6 +56,7 @@ async function handleResume() {
 	}
 }
 </script>
+
 <div class="flex flex-col gap-4 max-w-5xl h-full">
 	<header class="flex items-center justify-between border-b border-surface-800 bg-surface-900 px-4 py-3 rounded-t-lg shadow-sm">
 		<div class="flex items-center gap-4">
@@ -110,45 +113,13 @@ async function handleResume() {
 	{/if}
 
 	<div class="grid grid-cols-1 xl:grid-cols-2 gap-4 h-full">
-		<section class="bg-surface-800 border border-surface-700 rounded-lg p-4 shadow-lg flex flex-col gap-4">
-			<h2 class="text-sm font-bold text-surface-100 border-b border-surface-700 pb-2">Real-Time Status Pulse</h2>
-
-			<div class="grid grid-cols-2 gap-4">
-				<!-- Statistics derived from the reactive store -->
-				<div class="bg-surface-900 border border-surface-700 p-4 rounded text-center">
-					<div class="text-[10px] uppercase tracking-widest text-surface-400 mb-1">Total Signals</div>
-					<div class="text-xl font-mono font-bold text-primary-400">{wsStore?.statusEvents.length || 0}</div>
-				</div>
-
-				<div class="bg-surface-900 border border-surface-700 p-4 rounded text-center">
-					<div class="text-[10px] uppercase tracking-widest text-surface-400 mb-1">Completed</div>
-					<div class="text-xl font-mono font-bold text-success-500">
-						{wsStore?.statusEvents.filter(e => e.status === 'COMPLETED').length || 0}
-					</div>
-				</div>
-
-				<div class="bg-surface-900 border border-surface-700 p-4 rounded text-center">
-					<div class="text-[10px] uppercase tracking-widest text-surface-400 mb-1">Running</div>
-					<div class="text-xl font-mono font-bold text-warning-500">
-						{wsStore?.statusEvents.filter(e => e.status === 'RUNNING').length || 0}
-					</div>
-				</div>
-
-				<div class="bg-surface-900 border border-surface-700 p-4 rounded text-center">
-					<div class="text-[10px] uppercase tracking-widest text-surface-400 mb-1">Failed</div>
-					<div class="text-xl font-mono font-bold text-error-500">
-						{wsStore?.statusEvents.filter(e => e.status === 'FAILED').length || 0}
-					</div>
-				</div>
-			</div>
-
-			{#if wsStore?.statusEvents.length === 0}
-				<p class="text-surface-500 text-xs text-center mt-6 italic flex-auto">Waiting for events...</p>
-			{/if}
+		<section class="bg-surface-800 border border-surface-700 rounded-lg p-4 shadow-lg flex flex-col h-full min-h-[400px] overflow-hidden">
+			<!-- M9 Iteration Dashboard -->
+			<IterationDashboard events={wsStore?.statusEvents || []} />
 		</section>
 
 		<!-- M8 Virtualized Terminal -->
-		<section class="bg-surface-800 border border-surface-700 rounded-lg p-4 shadow-lg flex flex-col min-h-[400px]">
+		<section class="bg-surface-800 border border-surface-700 rounded-lg p-4 shadow-lg flex flex-col h-full min-h-[400px] overflow-hidden">
 			<h2 class="text-sm font-bold text-surface-100 mb-2 border-b border-surface-700 pb-2">Console</h2>
 			<div class="flex-auto overflow-hidden rounded relative">
 				<VirtualizedTerminal />
