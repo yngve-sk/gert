@@ -66,3 +66,41 @@ export async function listExecutions(
 	}
 	return response.json();
 }
+
+/**
+ * Pause a running execution.
+ */
+export async function pauseExecution(
+	experimentId: string,
+	executionId: string,
+	fetchInstance: typeof fetch = fetch,
+): Promise<void> {
+	const response = await fetchInstance(
+		`/experiments/${experimentId}/executions/${executionId}/pause`,
+		{
+			method: "POST",
+		},
+	);
+	if (!response.ok) {
+		throw new Error(`Failed to pause execution: ${response.statusText}`);
+	}
+}
+
+/**
+ * Resume a paused execution.
+ */
+export async function resumeExecution(
+	experimentId: string,
+	executionId: string,
+	fetchInstance: typeof fetch = fetch,
+): Promise<void> {
+	const response = await fetchInstance(
+		`/experiments/${experimentId}/executions/${executionId}/resume`,
+		{
+			method: "POST",
+		},
+	);
+	if (!response.ok) {
+		throw new Error(`Failed to resume execution: ${response.statusText}`);
+	}
+}
