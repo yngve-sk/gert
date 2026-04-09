@@ -531,7 +531,14 @@ async def start_experiment(
 
     # Validate environment-specific constraints (executables exist, etc)
     # This must happen before orchestration starts.
-    ExperimentOrchestrator.validate_config(config)
+    try:
+        ExperimentOrchestrator.validate_config(config)
+    except Exception as e:
+        logger.exception(f"Failed to validate config for experiment {experiment_id}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
 
     # Dependency injection here for orchestrator logic
     execution_id_ref = {"id": ""}

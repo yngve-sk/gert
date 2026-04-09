@@ -4,14 +4,16 @@ import logging
 import pathlib
 import socket
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from gert.server.models import ConnectionInfo
 from gert.server.router import router
 
 pathlib.Path("logs").mkdir(exist_ok=True, parents=True)
+
+logger = logging.getLogger(__name__)
 
 
 def get_free_port() -> int:
@@ -43,6 +45,18 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
         description="Generic Ensemble Reservoir Tool orchestration API.",
         version="0.1.0",
     )
+
+    @gert_server_app.exception_handler(Exception)
+    def global_exception_handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        logger.error(f"Unhandled exception on {request.url.path}", exc_info=exc)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal Server Error: {exc!s}"},
+        )
+
     gert_server_app.state.connection_info = conn_info
     gert_server_app.include_router(router)
 
@@ -55,15 +69,28 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
             name="app",
         )
 
-        @gert_server_app.get("/{full_path:path}", response_model=None)
-        async def serve_svelte_gui(full_path: str) -> FileResponse | None:
-            """Serve the SvelteKit SPA fallback."""
-            # Ensure API paths fall through
-            if full_path.startswith(("experiments", "logs")):
-                return None
-            physical_path = static_dir / full_path
+        @gert_server_app.exception_handler(404)
+        def custom_404_handler(
+            request: Request,
+            exc: Exception,
+        ) -> FileResponse | JSONResponse:
+            """Serve the SvelteKit SPA fallback for unhandled routes."""
+            path = request.url.path
+
+            # If the request is explicitly an API call, preserve the 404 JSON response
+            if path.startswith(("/experiments", "/logs", "/connection-info")):
+                detail = "Not Found"
+                if hasattr(exc, "detail"):
+                    detail = exc.detail
+                return JSONResponse({"detail": detail}, status_code=404)
+
+            path_stripped = path.lstrip("/")
+            physical_path = static_dir / path_stripped
+            # Serve specific static files if they exist (e.g. /favicon.png)
             if physical_path.is_file():
                 return FileResponse(physical_path)
+
+            # Otherwise, fallback to the SPA index.html to let Svelte router decide.
             return FileResponse(static_dir / "index.html")
 
     return gert_server_app
