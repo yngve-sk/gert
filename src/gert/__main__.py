@@ -579,10 +579,20 @@ def _scan_for_configs(paths: list[Path]) -> dict[str, ExperimentConfig]:
         if path.is_file():
             if path.suffix == ".json":
                 try:
-                    config = ExperimentConfig.model_validate_json(
-                        path.read_text(encoding="utf-8"),
-                    )
-                    # ID = parent_folder_config_name
+                    # Inject base_working_directory to match the scanned file's location
+                    with path.open("r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+
+                    if (
+                        "base_working_directory" not in config_data
+                        or config_data["base_working_directory"] == "."
+                    ):
+                        config_data["base_working_directory"] = str(
+                            path.parent.resolve(),
+                        )
+
+                    config = ExperimentConfig.model_validate(config_data)
+                    # ID equals parent folder and config name
                     # Using underscore to avoid routing issues with slashes
                     exp_id = f"{path.parent.name}_{config.name}"
                     configs[exp_id] = config
@@ -629,7 +639,7 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
             url = f"{resolved_api_url}/experiments/{last_registered_exp_id}"
         else:
             url = f"{resolved_api_url}/"
-            
+
         logger.info(f"Opening GERT Web GUI at {url}")
         print(f"Opening GERT Web GUI at {url}")
 
