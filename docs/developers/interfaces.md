@@ -26,8 +26,8 @@ This module isolates all high-throughput disk I/O, message queuing, and Parquet 
     * `start_watching(interval: float)`
     * *Implementation details:* Initialized with an `ensemble_path`. Uses `polars` to continuously drain the `.jsonl` queue, perform upserts/joins, and update the analytical columnar `.parquet` datasets.
 * **`StorageQueryAPI` (Interface)**
-    * `get_parameters(experiment_id: str, execution_id: str, iteration: int) -> DataFrame`: API endpoint streams data as `application/vnd.apache.parquet`.
-    * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None) -> DataFrame`: API endpoint streams data as `application/vnd.apache.parquet`.
+    * `get_parameters(experiment_id: str, execution_id: str, iteration: int, columns: List[str] | None, realization: int | None) -> DataFrame`: API endpoint streams data as `application/vnd.apache.parquet`. Accepts slicing arguments to prevent frontend OOM issues.
+    * `get_responses(experiment_id: str, execution_id: str, iteration: int, keys: List[str] | None, realization: int | None) -> DataFrame`: API endpoint streams data as `application/vnd.apache.parquet`. Accepts slicing arguments.
     * `get_manifest(experiment_id: str, execution_id: str, iteration: int) -> dict[str, float]`: Lightweight cache-busting endpoint returning the latest `.parquet` modification timestamps.
     * `flush(experiment_id: str, execution_id: str, iteration: int) -> bool`: Forces the Consolidator to drain the queue entirely before returning.
     * `get_update_metadata(experiment_id: str, execution_id: str, iteration: int) -> UpdateMetadata`: Retrieves the state, configuration, and metrics of the mathematical update that produced this iteration.
@@ -42,6 +42,7 @@ This module acts as the conductor. It reads the config, sets up the environments
     * `start_experiment(config: ExperimentConfig)`
     * `run_iteration(iteration: int, parameters: ParameterMatrix)`
     * `run_realization(realization_id: int, iteration: int)`
+    * `cancel_execution()`: Hard blocking cancel that aborts all internal tasks and commands the `JobSubmitter` to purge the queues.
 * **`JobSubmitter` (Interface wrapping `psij-python`)**
     * `submit(execution_steps: List[Step], queue_config: dict) -> str` (Returns backend job ID)
     * `cancel_all_jobs(experiment_id: str, execution_id: str)`: Hard blocking function to clear the cluster queue.
@@ -74,9 +75,16 @@ An isolated module dedicated purely to probability distributions and matrix gene
 ## 6. `gert.server` (API Routers & Process Management)
 This module exposes the internal modules as network services and manages their execution topologies.
 
+### 6.1 API Design Principles
+* **Real-Time Streaming:** The backend avoids HTTP polling where possible. Macro and granular state transitions are pushed to TUIs/GUIs via `WebSockets`.
+* **Data Pagination/Slicing:** Analytical endpoints returning Parquet blobs (e.g. `/parameters`, `/responses`) MUST support query parameters (like `?columns=PERM&realization=5`). The backend uses lazy Polars evaluation to slice large out-of-core datasets *before* network transmission to protect UI memory.
+* **Strict Iteration Separation (No Diffing):** API endpoints strictly scope data fetching to a specific iteration (e.g. `/ensembles/{iteration}/...`). The backend will *never* provide composite endpoints that pre-join "Prior vs Posterior" data. This ensures maximum decoupling: observation sets and active cell topologies might theoretically change between iterations, and the server remains a dumb storage router while the frontend retains full analytical control over how disparate iterations are overlaid.
+* **Hard Cancellation:** A dedicated `POST /experiments/{id}/executions/{exec_id}/cancel` endpoint exists to trigger a cascade of aggressive interrupts down to the HPC scheduler.
+
+### 6.2 Application Layer
 * **`app.py` (FastAPI Applications)**
-    * Maps HTTP endpoints (`POST /experiments`, `GET /storage/...`, `GET /experiments/{exp_id}/executions/{exec_id}/ensembles/{iteration}/update/metadata`) to internal controllers.
-    * Maps WebSocket endpoints (`WS /events`) to the state tracker.
+    * Maps HTTP endpoints (`POST /experiments`, `POST /experiments/.../cancel`, `GET /storage/...`) to internal controllers.
+    * Maps WebSocket endpoints (`WS /experiments/.../events`) to the state tracker.
 * **`ProcessManager`**
     * `boot_production()`: Spawns the Storage app, Experiment Runner app, and Parameters app in isolated OS processes.
     * `boot_dev()`: Spawns the apps in separate threads within a single process.
