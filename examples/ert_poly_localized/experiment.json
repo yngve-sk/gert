@@ -1,0 +1,109 @@
+{
+  "name": "ert-poly-localized-example",
+  "forward_model_steps": [
+    {
+      "name": "poly_eval",
+      "executable": "poly_eval.py",
+      "args": [
+        "--experiment-id",
+        "{experiment_id}",
+        "--execution-id",
+        "{execution_id}",
+        "--realization",
+        "{realization}",
+        "--iteration",
+        "{iteration}"
+      ]
+    }
+  ],
+  "updates": [
+    {
+      "name": "step_1",
+      "algorithm": "es_update",
+      "arguments": {
+        "random_seed": 1,
+        "weight": 1.0,
+        "localization_length": 5.0,
+        "taper_function": "gaspari_cohn"
+      }
+    }
+  ],
+  "grids": [
+    {
+      "id": "surface_grid",
+      "shape": [
+        10,
+        10
+      ]
+    },
+    {
+      "id": "deep_grid",
+      "shape": [
+        10,
+        10,
+        5
+      ]
+    }
+  ],
+  "queue_config": {
+    "backend": "local",
+    "custom_attributes": {}
+  },
+  "parameter_matrix": {
+    "metadata": {
+      "surface_param": {
+        "source": "prior",
+        "updatable": true,
+        "grid_id": "surface_grid"
+      },
+      "deep_param": {
+        "source": "prior",
+        "updatable": true,
+        "grid_id": "deep_grid"
+      }
+    },
+    "values": {},
+    "datasets": [
+      {
+        "reference": {
+          "path": "surface_param.parquet",
+          "format": "parquet"
+        },
+        "parameters": [
+          "surface_param"
+        ],
+        "index_columns": [
+          "x",
+          "y"
+        ]
+      },
+      {
+        "reference": {
+          "path": "deep_param.parquet",
+          "format": "parquet"
+        },
+        "parameters": [
+          "deep_param"
+        ],
+        "index_columns": [
+          "x",
+          "y",
+          "z"
+        ]
+      }
+    ]
+  },
+  "observations": [
+    {
+      "key": {
+        "response": "y"
+      },
+      "value": 15.0,
+      "std_dev": 1.0,
+      "coordinates": {
+        "x": 5.0,
+        "y": 5.0
+      }
+    }
+  ]
+}

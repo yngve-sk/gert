@@ -93,7 +93,7 @@ class GertForwardModelClient:
             raise last_exception
         raise httpx.HTTPError(msg)
 
-    def post_response(self, key: dict[str, str], value: float) -> None:
+    def post_response(self, key: dict[str, str | int | float], value: float) -> None:
         """Ingest a single response value."""
         payload = ResponsePayload(
             realization=self.realization_id,

@@ -47,6 +47,10 @@ class ParameterConfig(BaseModel):
     tags: list[str] = Field(default_factory=list)
     # Controls if this parameter enters the mathematical update vector.
     updatable: bool = True
+    grid_id: str | None = Field(
+        default=None,
+        description="Pointer to the GridMetadata for spatial fields.",
+    )
 
 
 class FileReference(BaseModel):
@@ -440,6 +444,7 @@ class ExperimentConfig(BaseModel):
     forward_model_steps: list[ExecutableForwardModelStep | PluginForwardModelStep]
     lifecycle_hooks: list[ExecutableHook | PluginHook] = Field(default_factory=list)
     updates: list[UpdateStep] = Field(default_factory=list)
+    grids: list[GridMetadata] = Field(default_factory=list)
     queue_config: QueueConfig
     parameter_matrix: ParameterMatrix
     observations: list[Observation]
@@ -511,7 +516,7 @@ class ResponsePayload(BaseModel):
 
     realization: int
     source_step: str
-    key: dict[str, str]
+    key: dict[str, str | int | float]
     value: float
 
     @model_validator(mode="after")

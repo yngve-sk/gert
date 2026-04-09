@@ -18,7 +18,6 @@ from gert.experiments.models import (
     ExecutableForwardModelStep,
     ExecutableHook,
     ExperimentConfig,
-    GridMetadata,
     ParameterMatrix,
     ParameterMetadata,
     UpdateMetadata,
@@ -348,7 +347,7 @@ class ExperimentOrchestrator:
             await asyncio.sleep(0.1)
             self._iteration_events[iteration].set()
 
-    async def run_experiment(self) -> None:  # noqa: C901
+    async def run_experiment(self) -> None:
         """Execute the full macro iteration loop (N+1 iterations)."""
         num_updates = len(self._config.updates)
 
@@ -750,34 +749,39 @@ class ExperimentOrchestrator:
 
         return _status_cb
 
-    def _inject_parameters(  # noqa: C901
+    def _inject_parameters(
         self,
         workdir: Path,
         realization_id: int,
         parameters: ParameterMatrix,
     ) -> None:
         """Inject parameters.json and field datasets into the realization workdir."""
+        updates_df: pl.DataFrame | None = None
+        if parameters.dataframe is not None:
+            updates_df = parameters.dataframe.filter(
+                pl.col("realization") == realization_id,
+            )
+            if len(updates_df) == 0:
+                updates_df = None
+
         # 1. Inject scalar values into parameters.json
         params = {}
         for key, val_dict in parameters.values.items():
             if realization_id in val_dict:
                 params[key] = val_dict[realization_id]
 
-        if parameters.dataframe is not None:
-            row_df = parameters.dataframe.filter(
-                pl.col("realization") == realization_id,
-            )
-            if len(row_df) > 0:
-                for key in parameters.values:
-                    if key in row_df.columns:
-                        params[key] = row_df[key].to_list()[0]
+        if updates_df is not None:
+            for key in parameters.values:
+                if key in updates_df.columns:
+                    params[key] = updates_df[key].to_list()[0]
 
         with (workdir / "parameters.json").open("w", encoding="utf-8") as f:
             json.dump(params, f)
 
         # 2. Inject field datasets (ParameterDataset)
         for i, dataset in enumerate(parameters.datasets):
-            source_path = Path(dataset.reference.path)
+            formatted_path = dataset.reference.path.format(realization=realization_id)
+            source_path = Path(formatted_path)
             if not source_path.is_absolute():
                 source_path = (
                     self._config.base_working_directory / source_path
@@ -786,39 +790,50 @@ class ExperimentOrchestrator:
             if not source_path.exists():
                 continue
 
-            # Load the prior base dataset
+            target_name = f"field_data_{i}.parquet"
+            target_path = workdir / target_name
+
+            has_updates = False
+            if updates_df is not None:
+                for param in dataset.parameters:
+                    if param in updates_df.columns:
+                        has_updates = True
+                        break
+
+            # Optimization: If there are no updates to apply, we may be able to just
+            # symlink the original source dataset instead of reading and writing it.
+            if not has_updates:
+                schema = pl.scan_parquet(source_path).schema
+                is_consolidated = (
+                    "realization" in schema
+                    and "{realization}" not in dataset.reference.path
+                )
+                if not is_consolidated:
+                    if target_path.exists() or target_path.is_symlink():
+                        target_path.unlink()
+                    Path(target_path).symlink_to(source_path)
+                    continue
+
+            # Materialize if consolidated or mathematically updated
             df = pl.read_parquet(source_path)
 
-            # Filter for this specific realization
             if "realization" in df.columns:
                 real_df = df.filter(pl.col("realization") == realization_id)
             else:
-                # If no realization column, assume the file is for one realization.
-                # Possible in partitioned schemes.
                 real_df = df
 
-            # Sort indices to match models.py `_merge_datasets` alignment
             if dataset.index_columns:
                 real_df = real_df.sort(dataset.index_columns)
 
-            # If the matrix contains updated values, overwrite them here
-            if parameters.dataframe is not None:
-                row_df = parameters.dataframe.filter(
-                    pl.col("realization") == realization_id,
-                )
-                if len(row_df) > 0:
-                    for param in dataset.parameters:
-                        if param in row_df.columns:
-                            # Extract the aggregated array/list
-                            updated_vals = row_df[param].to_list()[0]
-                            # Overwrite the physical parameter
-                            real_df = real_df.with_columns(
-                                pl.Series(name=param, values=updated_vals),
-                            )
+            if has_updates and updates_df is not None and len(updates_df) > 0:
+                for param in dataset.parameters:
+                    if param in updates_df.columns:
+                        updated_vals = updates_df[param].to_list()[0]
+                        real_df = real_df.with_columns(
+                            pl.Series(name=param, values=updated_vals),
+                        )
 
-            # Determine target filename
-            target_name = f"field_data_{i}.parquet"
-            real_df.write_parquet(workdir / target_name)
+            real_df.write_parquet(target_path)
 
     async def _wait_for_iteration(self, iteration: int) -> None:
         """Wait until all realizations in the iteration are final or paused.
@@ -870,6 +885,7 @@ class ExperimentOrchestrator:
                 )
                 raise ValueError(msg)
 
+    # ruff: noqa: C901
     async def perform_update(self, iteration: int) -> pl.DataFrame:
         """Invoke the math plugin for the given iteration.
 
@@ -941,22 +957,23 @@ class ExperimentOrchestrator:
         toolkit = SpatialToolkit()
         parameter_metadata = []
 
+        for grid in self._config.grids:
+            toolkit.register_grid(grid)
+
         # Map to find which parameter belongs to which dataset/grid
         param_to_grid = {}
-        grid_configs = {}
 
-        for i, dataset in enumerate(self._config.parameter_matrix.datasets):
-            grid_id: str | None = f"grid_{i}"  # Initialize as str | None
+        for dataset in self._config.parameter_matrix.datasets:
+            # We must look up the grid ID from the metadata for each parameter.
+            # Assuming all parameters in a dataset share the same grid_id.
+            grid_id: str | None = None
+            if dataset.parameters:
+                p_name = dataset.parameters[0]
+                if p_name in self._config.parameter_matrix.metadata:
+                    grid_id = self._config.parameter_matrix.metadata[p_name].grid_id
+
             for p_name in dataset.parameters:
                 param_to_grid[p_name] = grid_id
-
-            # In a real scenario, we'd read the actual coordinates and shape
-            # For now, we infer a simple shape or use a placeholder
-            # The coordinates are stored in the dataset files
-            grid_configs[grid_id] = {
-                "dataset_idx": i,
-                "index_columns": dataset.index_columns,
-            }
 
         # Identify updatable keys for this step
         update_step = self._config.updates[iteration]
@@ -966,12 +983,8 @@ class ExperimentOrchestrator:
 
         for key in updatable_keys:
             grid_id = param_to_grid.get(key)
-            if grid_id is not None and grid_id not in toolkit.get_grids():
-                # Register grid with toolkit
-                # Note: We'd ideally have shape in the config.
-                # Fallback to a stub shape (100, 100, 1) or similar if unknown.
-                grid = GridMetadata(id=grid_id, shape=(100, 100, 1))
-                toolkit.register_grid(grid)
+            if grid_id is None and key in self._config.parameter_matrix.metadata:
+                grid_id = self._config.parameter_matrix.metadata[key].grid_id
 
             pm = ParameterMetadata(
                 name=key,

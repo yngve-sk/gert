@@ -32,26 +32,28 @@ def cleanup_storage() -> Generator[None]:
         shutil.rmtree(workdirs_path)
 
 
-def test_semi_realistic_da_convergence(
+def test_poly_localized_da_convergence(
     copy_example: Callable[[str], Path],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Run semi_realistic example and verify that variance decreases over iterations."""
-    config_dir = copy_example("semi_realistic")
+    """Run ert_poly_localized example and verify convergence."""
+    config_dir = copy_example("ert_poly_localized")
     monkeypatch.chdir(config_dir)
 
     monkeypatch.setenv("GERT_DISCOVERY_DIR", str(tmp_path))
 
-    subprocess.run([sys.executable, "generate_prior.py"], check=True)
-    subprocess.run([sys.executable, "setup_observations.py"], check=True)
+    subprocess.run([sys.executable, "generate_experiment.py"], check=True)
 
     with Path("experiment.json").open(encoding="utf-8") as f:
         config_data = json.load(f)
 
-    # Start server using discovery (no manual port specification)
+    # API requires `base_working_directory` but the CLI normally injects it
+    config_data["base_working_directory"] = str(config_dir.resolve())
+
+    # Start server using discovery
     server_process = subprocess.Popen(
-        [sys.executable, "-m", "gert", "server"],  # Remove --port 0
+        [sys.executable, "-m", "gert", "server"],
         cwd=config_dir,
         stdout=sys.stdout,
         stderr=sys.stderr,
@@ -65,8 +67,10 @@ def test_semi_realistic_da_convergence(
         api_url = connection_info.base_url
         client.base_url = api_url
 
-        # 2. Register and start experiment
+        # Register and start experiment
         resp = client.post("/experiments", json=config_data)
+        if resp.status_code != 201:
+            print(f"Validation Error: {resp.text}")
         assert resp.status_code == 201
         experiment_id = resp.json()["id"]
 
@@ -74,8 +78,8 @@ def test_semi_realistic_da_convergence(
         assert resp.status_code == 200
         execution_id = resp.json()["execution_id"]
 
-        # 3. Poll for completion
-        max_wait = 300  # seconds
+        # Poll for completion
+        max_wait = 180  # seconds
         start_time = time.time()
 
         num_iterations = len(config_data["updates"]) + 1
@@ -119,7 +123,6 @@ def test_semi_realistic_da_convergence(
                 f"Expected {num_iterations * expected_realizations} done jobs, got {done_count}. Statuses: {statuses}",
             )
 
-        # Check for FAILED states
         failed_count = sum(
             1 for s in statuses if s["status"] == "FAILED" and s["iteration"] >= 0
         )
@@ -127,9 +130,8 @@ def test_semi_realistic_da_convergence(
             f"Found {failed_count} failed jobs! Statuses: {statuses}"
         )
 
-        # 4. Analyze variance of PERM parameter over iterations
+        # Analyze variance of surface_param over iterations
         variances = []
-
         for it in range(num_iterations):
             params_resp = client.get(
                 f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{it}/parameters",
@@ -137,15 +139,11 @@ def test_semi_realistic_da_convergence(
             assert params_resp.status_code == 200
             df = pl.read_parquet(io.BytesIO(params_resp.content))
 
-            # PERM is a list column. Convert to 2D array: (realizations, cells)
-            perms_2d = np.array(df["PERM"].to_list())
-
-            # Calculate variance across realizations (axis=0) for each cell, then average
-            cell_variances = np.var(perms_2d, axis=0)
+            surface_2d = np.array(df["surface_param"].to_list())
+            cell_variances = np.var(surface_2d, axis=0)
             ensemble_spread = float(np.mean(cell_variances))
-
             variances.append(ensemble_spread)
-        # 5. Assert lessening of variance
+
         for i in range(1, num_iterations):
             assert variances[i] < variances[i - 1], (
                 f"Ensemble spread did not decrease at iteration {i}: "
