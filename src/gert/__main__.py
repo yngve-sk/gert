@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 import time
+import webbrowser
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -541,7 +542,32 @@ def _parse_args() -> argparse.Namespace:
     conn_subparsers.add_parser("token", help="Print just auth token for scripts")
     conn_subparsers.add_parser("wait", help="Wait for server to become available")
 
+    # GUI Command
+    ui_parser = subparsers.add_parser("ui", help="Launch the GERT Web GUI")
+    ui_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for the server to bind to (default: 8000)",
+    )
+
     return parser.parse_args()
+
+
+def _handle_ui_command(args: argparse.Namespace) -> None:
+    """Launch the Web GUI server and open the browser."""
+    logger = logging.getLogger("gert.cli")
+    url = f"http://127.0.0.1:{args.port}/_app/index.html"
+
+    logger.info(f"Starting GERT Web GUI on {url}")
+
+    # We can launch the browser first since the UI has loading screens/retries
+    webbrowser.open(url)
+
+    # Reuse the server command logic but force the port
+    args.host = "127.0.0.1"
+    args.port = args.port
+    _handle_server_command(args)
 
 
 def main() -> None:
@@ -552,6 +578,8 @@ def main() -> None:
         _handle_run_command(args)
     elif args.command == "server":
         _handle_server_command(args)
+    elif args.command == "ui":
+        _handle_ui_command(args)
     elif args.command == "monitor":
         _handle_monitor_command(args)
     elif args.command == "connect":

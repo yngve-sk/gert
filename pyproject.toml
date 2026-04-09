@@ -62,6 +62,7 @@ include = ["/src", "/tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gert"]
+include = ["src/gert/server/static/**/*"]
 artifacts = ["src/gert/server/static/**/*"]
 
 # The [tool.setuptools] and [tool.setuptools_scm] sections are no longer needed and should be deleted.
