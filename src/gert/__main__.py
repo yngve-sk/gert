@@ -582,9 +582,9 @@ def _scan_for_configs(paths: list[Path]) -> dict[str, ExperimentConfig]:
                     config = ExperimentConfig.model_validate_json(
                         path.read_text(encoding="utf-8"),
                     )
-                    # ID = parent_folder + config_name
-                    # Using slash to mimic a hierarchy in the ID
-                    exp_id = f"{path.parent.name}/{config.name}"
+                    # ID = parent_folder_config_name
+                    # Using underscore to avoid routing issues with slashes
+                    exp_id = f"{path.parent.name}_{config.name}"
                     configs[exp_id] = config
                 except (ValidationError, ValueError, json.JSONDecodeError):
                     continue
@@ -610,6 +610,7 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
         server_process, resolved_api_url = _ensure_server(client, args.api_url)
 
         # Register scanned configs with the server
+        last_registered_exp_id = None
         for exp_id, config in scanned_configs.items():
             try:
                 # Use the new endpoint with ID override
@@ -620,10 +621,15 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
                     headers={"Content-Type": "application/json"},
                 )
                 logger.info(f"Registered experiment '{exp_id}' with server.")
+                last_registered_exp_id = exp_id
             except Exception:
                 logger.exception(f"Failed to register experiment '{exp_id}'")
 
-        url = f"{resolved_api_url}/"
+        if len(scanned_configs) == 1 and last_registered_exp_id:
+            url = f"{resolved_api_url}/experiments/{last_registered_exp_id}"
+        else:
+            url = f"{resolved_api_url}/"
+            
         logger.info(f"Opening GERT Web GUI at {url}")
         print(f"Opening GERT Web GUI at {url}")
 
