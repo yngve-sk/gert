@@ -1,5 +1,6 @@
 """CLI Monitor for GERT experiments using Textual."""
 
+import asyncio
 import io
 import json
 import logging
@@ -11,8 +12,8 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.error import URLError
 
-import httpx
 import polars as pl
+import websockets  # type: ignore[import-not-found]
 from pydantic import BaseModel, ConfigDict, Field
 from rich.markup import escape
 from textual import work
@@ -244,6 +245,11 @@ class MonitorDashboardScreen(Screen[None]):
         if hasattr(self.app, "action_toggle_plotter"):
             self.app.action_toggle_plotter()
 
+    def on_mount(self) -> None:
+        """Trigger an initial UI refresh once the screen is fully mounted."""
+        if hasattr(self.app, "_refresh_ui"):
+            self.app._refresh_ui()  # noqa: SLF001
+
 
 class NodeData(BaseModel):
     """Data attached to each tree node for navigation details."""
@@ -395,14 +401,19 @@ class GertMonitorApp(App[None]):
         self._exiting: bool = False
         self._selected_item: NodeData | None = None
         self._total_steps_in_config: int | None = None
+        self._execution_status: str | None = None
 
         if self.execution_id:
-            self.status_url = (
-                f"{self.api_url}/experiments/{self.experiment_id}/executions/"
-                f"{self.execution_id}/status"
+            base_ws = self.api_url.replace("http://", "ws://").replace(
+                "https://",
+                "wss://",
+            )
+            self.ws_url = (
+                f"{base_ws}/experiments/{self.experiment_id}/executions/"
+                f"{self.execution_id}/events"
             )
         else:
-            self.status_url = ""
+            self.ws_url = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -463,6 +474,7 @@ class GertMonitorApp(App[None]):
                     self.num_iterations = config.num_iterations
                     self.expected_count = config.num_realizations
                     self._num_fm_steps = config.num_fm_steps
+                    self.app.call_from_thread(self._refresh_ui)
         except URLError:
             logger.exception("Failed to fetch experiment config")
 
@@ -595,102 +607,8 @@ class GertMonitorApp(App[None]):
             f"{emoji} {st} | 🕒 {start} -> {end}"
         )
 
-    def _check_if_all_realizations_are_done(self) -> bool:
-        """Poll status API and return True if execution or realizations are finished."""
-        if not self.status_url:
-            logger.warning("status_url is empty!")
-            return False
-
-        # 1. Check if the overall execution is in a terminal state
-        is_terminal = self._is_execution_terminal()
-
-        # 2. Update local state with latest realization data
-        realizations_updated = self._fetch_and_update_realizations()
-
-        # 3. Decision logic
-        if is_terminal:
-            return True
-
-        if realizations_updated:
-            return self._all_realizations_completed()
-
-        return False
-
-    def _is_execution_terminal(self) -> bool:
-        """Helper to check the high-level execution status."""
-        state_url = (
-            f"{self.api_url}/experiments/{self.experiment_id}"
-            f"/executions/{self.execution_id}/state"
-        )
-
-        if not state_url.startswith(("http://", "https://")):
-            logger.error(f"Refusing to open URL with unsafe scheme: {state_url}")
-            return False
-
-        terminal_states = {"COMPLETED", "FAILED", "PAUSED", "PAUSING"}
-
-        try:
-            # We use a 5s timeout and context manager for safety
-            with urllib.request.urlopen(state_url, timeout=5) as resp:  # noqa: S310
-                if resp.getcode() == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    status = data.get("status")
-                    if status in terminal_states:
-                        logger.info(f"Execution reached terminal state: {status}")
-                        return True
-        except Exception:
-            logger.exception("Failed to fetch execution state.")
-
-        return False
-
-    def _fetch_and_update_realizations(self) -> bool:
-        """Fetches realization data and pushes it to the UI/Thread."""
-        if not self.status_url:
-            logger.warning("status_url is empty!")
-            return False
-
-        try:
-            # httpx handles the connection pooling and context management internally
-            with httpx.Client(timeout=5.0) as client:
-                response = client.get(self.status_url)
-
-                # Check for 2xx status codes
-                if response.status_code == 200:
-                    # response.json() automatically handles decoding and parsing
-                    data = response.json()
-
-                    parsed = [RealizationState.model_validate(item) for item in data]
-
-                    self.call_from_thread(self.process_data, parsed)
-                    return True
-                logger.warning(f"Failed to fetch status: HTTP {response.status_code}")
-
-        except httpx.RequestError as exc:
-            # Catches connection issues, timeouts, etc.
-            logger.exception(f"Network error while requesting {exc.request.url!r}")
-        except Exception:
-            # Catches parsing errors (e.g., invalid JSON or Pydantic validation)
-            logger.exception("Unexpected error updating realizations")
-
-        return False
-
-    def _all_realizations_completed(self) -> bool:
-        """Calculates if the count and status
-        of realizations meet completion criteria."""
-        if not (self.expected_count and self.num_iterations):
-            return False
-
-        total_expected = self.expected_count * self.num_iterations
-        done_states = {"COMPLETED", "FAILED"}
-
-        reached_count = len(self._statuses) >= total_expected
-        all_finished = all(s.status in done_states for s in self._statuses.values())
-
-        return reached_count and all_finished
-
     def _poll_responses(self) -> None:
         """Poll the responses API for all discovered iterations."""
-        # Poll for each iteration we know about.
         iterations = sorted({it for it, _ in self._statuses})
         if not iterations:
             logger.info("No iterations discovered to poll responses for.")
@@ -702,7 +620,6 @@ class GertMonitorApp(App[None]):
 
     def _poll_extra_iteration_info(self, it: int) -> None:
         """Poll for observation summary and update metadata for an iteration."""
-        # Poll for observation summary
         summary_url = (
             f"{self.api_url}/experiments/{self.experiment_id}"
             f"/executions/{self.execution_id}/ensembles/{it}/observation_summary"
@@ -713,9 +630,7 @@ class GertMonitorApp(App[None]):
                 if summary_resp.getcode() == 200:
                     summary_data = json.loads(summary_resp.read().decode("utf-8"))
                     if summary_data is not None:
-                        parsed_summary = ObservationSummary.model_validate(
-                            summary_data,
-                        )
+                        parsed_summary = ObservationSummary.model_validate(summary_data)
                         self.call_from_thread(
                             self.process_observation_summary,
                             it,
@@ -724,7 +639,6 @@ class GertMonitorApp(App[None]):
         except URLError:
             pass
 
-        # Poll for update metadata if iteration > 0
         if it > 0:
             meta_url = (
                 f"{self.api_url}/experiments/{self.experiment_id}"
@@ -766,36 +680,114 @@ class GertMonitorApp(App[None]):
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to poll responses: {e}")
 
-    @work(exclusive=True, thread=True)
-    def poll_api(self) -> None:
-        """Poll the API for status updates in a background thread."""
-        counter = 0
+    # ruff: noqa: C901
+    @work(exclusive=True)
+    async def poll_api(self) -> None:
+        """Connect to WebSocket for status updates and poll for responses."""
+        if not getattr(self, "ws_url", None):
+            return
 
-        done_cycles = 0
-        while not self._exiting:
-            logger.info(f"Polling API... counter={counter}")
-            is_done = self._check_if_all_realizations_are_done()
-            logger.info(f"is_done={is_done}")
+        async def _poll_loop() -> None:
+            while not self._exiting:
+                await asyncio.to_thread(self._poll_responses)
 
-            self._poll_responses()
-
-            counter += 1
-
-            if is_done:
-                done_cycles += 1
-                # Wait a few cycles to ensure we pick
-                # up the final asynchronously written .parquet files
-                if done_cycles > 3:
-                    logger.info("Experiment done, exiting poll loop.")
+                is_done = self._execution_status in {
+                    "COMPLETED",
+                    "FAILED",
+                    "PAUSED",
+                    "PAUSING",
+                }
+                if is_done:
+                    await asyncio.sleep(3)
+                    # Poll one last time to catch the final flushed outputs
+                    await asyncio.to_thread(self._poll_responses)
+                    self._exiting = True
                     break
+                await asyncio.sleep(1.0)
 
-            time.sleep(1.0)
+        poll_task = asyncio.create_task(_poll_loop())
 
-    def process_data(self, parsed_data: list[RealizationState]) -> None:
-        """Process API data and update UI components on the main thread."""
+        try:
+            async for websocket in websockets.connect(self.ws_url):
+                try:
+                    batch = []
+                    last_ui_update = time.time()
+                    async for message in websocket:
+                        event = json.loads(message)
+                        batch.append(event)
+
+                        now = time.time()
+                        if now - last_ui_update > 0.1 or len(batch) > 100:
+                            self._process_ws_events(batch)
+                            batch = []
+                            last_ui_update = now
+
+                        if self._exiting:
+                            await websocket.close()
+                            break
+
+                    if batch:
+                        self._process_ws_events(batch)
+
+                except websockets.ConnectionClosed:
+                    if self._exiting:
+                        break
+                    await asyncio.sleep(1)
+                except Exception:
+                    logger.exception("Error in websocket loop")
+                    await asyncio.sleep(1)
+        except Exception:
+            logger.exception("Failed to connect to websocket")
+        finally:
+            poll_task.cancel()
+
+    def _process_ws_events(self, events: list[dict[str, Any]]) -> None:
+        """Process a batch of WebSocket events and refresh the UI."""
+        for event in events:
+            it = event.get("iteration")
+            r_id = event.get("realization_id")
+            status = event.get("status")
+            step_name = event.get("step_name")
+            timestamp = event.get("timestamp")
+
+            if it == -1 and r_id == -1:
+                self._execution_status = status
+                continue
+
+            if it is None or r_id is None:
+                continue
+
+            if (it, r_id) not in self._statuses:
+                self._statuses[it, r_id] = RealizationState(
+                    realization_id=r_id,
+                    iteration=it,
+                    status="PENDING",
+                    steps=[],
+                )
+
+            state = self._statuses[it, r_id]
+
+            if step_name:
+                step = next((s for s in state.steps if s.name == step_name), None)
+                if not step:
+                    step = StepState(name=step_name, status=str(status))
+                    state.steps.append(step)
+
+                step.status = str(status)
+                if status == "RUNNING" and not step.start_time:
+                    step.start_time = timestamp
+                elif status in {"COMPLETED", "FAILED"}:
+                    step.end_time = timestamp
+            else:
+                state.status = str(status)
+
+        self._refresh_ui()
+
+    def _refresh_ui(self) -> None:
+        """Refresh UI components based on current state."""
         state_counts: dict[str, int] = defaultdict(int)
+        parsed_data = list(self._statuses.values())
 
-        # Precompute num_fm_steps from data if _fetch_config hasn't finished
         if self._num_fm_steps == 0 and parsed_data:
             self._num_fm_steps = max(
                 (len(item.steps) for item in parsed_data),
@@ -808,7 +800,6 @@ class GertMonitorApp(App[None]):
         except Exception:  # noqa: BLE001
             return
 
-        # First pass: update all realizations and aggregate counts
         for item in parsed_data:
             r_id = item.realization_id
             it = item.iteration
@@ -818,7 +809,6 @@ class GertMonitorApp(App[None]):
             if it not in iter_counts:
                 continue
 
-            self._statuses[it, r_id] = item
             state_counts[st] += 1
 
             if st in {"COMPLETED", "FAILED"}:
@@ -845,10 +835,14 @@ class GertMonitorApp(App[None]):
         self,
         data: list[RealizationState],
     ) -> dict[int, IterationCount]:
-        """Pre-initialize counts with planned totals."""
-
+        """Pre-initialize counts with planned totals and discovered iterations."""
         iter_counts: dict[int, IterationCount] = {}
-        for i in range(self.num_iterations):
+
+        # Discover the maximum iteration seen so far
+        max_seen_iter = max((item.iteration for item in data), default=-1)
+        target_iters = max(self.num_iterations, max_seen_iter + 1)
+
+        for i in range(target_iters):
             planned_r = self.expected_count or 0
             if not planned_r and data:
                 # Fallback discovery
@@ -1075,6 +1069,7 @@ class GertMonitorApp(App[None]):
                 iteration_responses[item.realization].append(item)
 
         self._responses[iteration] = dict(iteration_responses)
+        self._refresh_ui()
 
     def process_observation_summary(
         self,
@@ -1085,6 +1080,7 @@ class GertMonitorApp(App[None]):
         if not parsed_summary:
             return
         self._observation_summaries[iteration] = parsed_summary
+        self._refresh_ui()
 
     def process_update_metadata(
         self,
@@ -1101,6 +1097,7 @@ class GertMonitorApp(App[None]):
                 f"{emoji} 🧮✨ Update (Iter {iteration - 1} → {iteration}) "
                 f"- {parsed_meta.algorithm_name}",
             )
+        self._refresh_ui()
 
     def on_tree_node_highlighted(
         self,

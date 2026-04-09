@@ -110,3 +110,62 @@ def test_get_nonexistent_experiment() -> None:
     response = client.get("/experiments/nonexistent/config")
     assert response.status_code == 404
     assert response.json()["detail"] == "Experiment 'nonexistent' not found"
+
+
+def test_cancel_execution() -> None:
+    """Test creating an experiment, starting it, and then cancelling."""
+    client = TestClient(gert_server_app)
+    config_data = {
+        "name": "test-experiment-cancel",
+        "base_working_directory": ".",
+        "forward_model_steps": [
+            {
+                "name": "step1",
+                "executable": sys.executable,
+                "args": ["-c", "import time; time.sleep(1)"],
+            },
+        ],
+        "queue_config": {
+            "backend": "local",
+        },
+        "parameter_matrix": {
+            "metadata": {},
+            "values": {"MULTFLT": {0: 1.0}},
+            "datasets": [],
+        },
+        "observations": [
+            {
+                "key": {"response": "FOPR"},
+                "value": 100.0,
+                "std_dev": 10.0,
+            },
+        ],
+    }
+
+    # POST /experiments
+    response = client.post("/experiments", json=config_data)
+    assert response.status_code == 201
+    experiment_id = response.json()["id"]
+
+    # POST /experiments/{experiment_id}/start
+    start_response = client.post(f"/experiments/{experiment_id}/start")
+    assert start_response.status_code == 200
+    execution_id = start_response.json()["execution_id"]
+
+    # POST /experiments/{experiment_id}/executions/{execution_id}/cancel
+    cancel_response = client.post(
+        f"/experiments/{experiment_id}/executions/{execution_id}/cancel",
+    )
+    assert cancel_response.status_code == 200
+    assert cancel_response.json() == {"status": "success"}
+
+    # GET /experiments/{experiment_id}/executions/{execution_id}/state
+    state_response = client.get(
+        f"/experiments/{experiment_id}/executions/{execution_id}/state",
+    )
+    assert state_response.status_code == 200
+    state_data = state_response.json()
+    assert state_data["status"] in {
+        "CANCELED",
+        "RUNNING",
+    }  # Might be running briefly before the background task completes

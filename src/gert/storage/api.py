@@ -101,7 +101,7 @@ class StorageAPI:
         meta_file = iter_dir / "update_metadata.json"
         meta_file.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
 
-    def get_observation_summary(  # noqa: C901
+    def get_observation_summary(
         self,
         experiment_id: str,
         execution_id: str,
@@ -258,11 +258,16 @@ class StorageAPI:
         experiment_id: str,
         execution_id: str,
         iteration: int,
+        columns: list[str] | None = None,
+        realization: int | None = None,
     ) -> pl.DataFrame:
         """Retrieve all consolidated responses for an experiment and iteration.
 
         Reads the schema-partitioned response files without relying on a registry
         and vertically concatenates them into a massive Tidy (Long) DataFrame.
+
+        Supports filtering by realization and selecting specific columns.
+        Always keeps the 'realization' column if columns are selected.
 
         Raises:
             FileNotFoundError: If the consolidated data doesn't exist.
@@ -280,19 +285,38 @@ class StorageAPI:
             msg = "Consolidated responses for experiment not found."
             raise FileNotFoundError(msg)
 
-        dfs = [pl.read_parquet(f) for f in schema_files]
-        return pl.concat(dfs, how="diagonal")
+        lfs = [pl.scan_parquet(f) for f in schema_files]
+        lf = pl.concat(lfs, how="diagonal")
 
+        if realization is not None:
+            lf = lf.filter(pl.col("realization") == realization)
+
+        if columns is not None:
+            if "realization" not in columns:
+                columns = ["realization", *columns]
+
+            existing_cols = lf.columns
+            columns = [c for c in columns if c in existing_cols]
+            lf = lf.select(columns)
+
+        return lf.collect()
+
+    # ruff: noqa: C901
     def get_parameters(
         self,
         experiment_id: str,
         execution_id: str,
         iteration: int,
+        columns: list[str] | None = None,
+        realization: int | None = None,
     ) -> pl.DataFrame:
         """Retrieve the parameter matrix used for a specific iteration.
 
         Infers spatial fields by scanning parquet schemas, sorts them by their
         coordinate columns, and groups them into List columns.
+
+        Supports filtering by realization and selecting specific columns.
+        Always keeps the 'realization' column if columns are selected.
 
         Raises:
             FileNotFoundError: If the parameters for the iteration are not found.
@@ -306,29 +330,59 @@ class StorageAPI:
         if not schema_files:
             schema_files = list(iter_dir.glob("parameters_*.parquet"))
 
-        dfs = []
+        lfs = []
         for filepath in schema_files:
-            df = pl.read_parquet(filepath)
+            lf = pl.scan_parquet(filepath)
 
-            if len(df) == df["realization"].n_unique():
-                dfs.append(df)
-            else:
+            if columns:
+                # Check if this file contains any of the requested columns
+                file_cols = lf.collect_schema().names()
+                relevant_cols = [c for c in file_cols if c in columns]
+                if not relevant_cols and "realization" not in columns:
+                    continue
+
+            if realization is not None:
+                lf = lf.filter(pl.col("realization") == realization)
+
+            df = lf.collect()
+            if len(df) == 0:
+                continue
+
+            if len(df) != df["realization"].n_unique():
+                # Spatial field
                 sort_cols = [c for c in df.columns if c != "realization"]
                 df = df.sort(sort_cols)
-                grouped = df.group_by("realization", maintain_order=True).agg(pl.all())
-                dfs.append(grouped)
+                df = df.group_by("realization", maintain_order=True).agg(pl.all())
 
-        if not dfs:
+            if columns:
+                # Ensure realization is kept
+                cols_to_select = ["realization"] + [
+                    c for c in relevant_cols if c != "realization"
+                ]
+                df = df.select(cols_to_select)
+
+            lfs.append(df.lazy())
+
+        if not lfs:
             legacy_file = iter_dir / "parameters.parquet"
             if legacy_file.exists():
-                return pl.read_parquet(legacy_file)
+                lf = pl.scan_parquet(legacy_file)
+                if realization is not None:
+                    lf = lf.filter(pl.col("realization") == realization)
+                if columns:
+                    cols_to_select = ["realization"] + [
+                        c for c in columns if c in lf.columns and c != "realization"
+                    ]
+                    lf = lf.select(cols_to_select)
+                return lf.collect()
             msg = "Parameters not found."
             raise FileNotFoundError(msg)
 
-        result = dfs[0]
-        for df in dfs[1:]:
-            result = result.join(df, on="realization", how="full")
-        return result
+        result_lf = lfs[0]
+        for next_lf in lfs[1:]:
+            result_lf = result_lf.join(next_lf, on="realization", how="full")
+
+        return result_lf.collect()
 
     def write_parameters(
         self,
