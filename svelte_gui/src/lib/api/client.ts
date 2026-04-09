@@ -21,6 +21,13 @@ export interface ExecutionState {
 	error: string | null;
 }
 
+export interface ObservationSummary {
+	average_absolute_residual: number;
+	average_misfit: number;
+	average_absolute_misfit: number;
+	// details omitted for brevity in UI
+}
+
 /**
  * Fetch all experiments from the API.
  * Thanks to the Vite proxy, we can use the relative path '/experiments'
@@ -103,4 +110,27 @@ export async function resumeExecution(
 	if (!response.ok) {
 		throw new Error(`Failed to resume execution: ${response.statusText}`);
 	}
+}
+
+/**
+ * Fetch observation summary for a specific iteration.
+ */
+export async function getObservationSummary(
+	experimentId: string,
+	executionId: string,
+	iteration: number,
+	fetchInstance: typeof fetch = fetch,
+): Promise<ObservationSummary | null> {
+	const response = await fetchInstance(
+		`/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/observation_summary`,
+	);
+	if (response.status === 404) {
+		return null;
+	}
+	if (!response.ok) {
+		throw new Error(
+			`Failed to fetch observation summary: ${response.statusText}`,
+		);
+	}
+	return response.json();
 }
