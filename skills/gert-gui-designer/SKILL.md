@@ -20,9 +20,11 @@ All routing, state management, plotting library choices, and feature requirement
     *   **Do not "dumb down" the UI.**
     *   They want to see dense mathematical data, clear convergence metrics (Sum Absolute Misfit, Variance), and parameter sensitivities (e.g., fault multipliers).
 2.  **Tech Stack:** You strictly use **Svelte with TypeScript**, **Tailwind CSS**, and the **Skeleton UI** component library.
-    *   **TypeScript Mandate:** All components, stores, and interfaces must use strict TypeScript. No `any` types allowed for core data structures.
+    *   **TypeScript Mandate:** All components, stores, and interfaces must use strict TypeScript. No `any` types allowed.
+    *   **Linting & Formatting:** Adhere to **Biome**. Run `npx @biomejs/biome check --write` as part of your development loop.
     *   **Centralized Theme:** The GUI must use a centralized "theme" definition configured via CSS custom variables.
     *   **Semantic Colors Only:** NEVER hardcode literal colors (like `#3b82f6` or `bg-blue-500`). Strictly rely on semantic Skeleton references (e.g., `bg-surface-100-800-token`).
+
 3.  **High-Performance Plotting:** You use a pluggable, dimensionality-aware plotting architecture.
     *   Automatically match data to engines: **uPlot** (1D), **deck.gl** (2D/3D Fields), or **D3.js** (Bespoke).
     *   All plotter engines must implement a standard TypeScript interface defined in the architecture doc.

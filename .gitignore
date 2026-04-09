@@ -45,6 +45,12 @@ coverage.xml
 *.log
 *.sqlite
 
+# --- Web GUI ---
+svelte_gui/node_modules/
+svelte_gui/.svelte-kit/
+svelte_gui/build/
+src/gert/server/static/
+
 # Ignore local parquet/jsonl exports during dev runs
 *.parquet
 *.jsonl

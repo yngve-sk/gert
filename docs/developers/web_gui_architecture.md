@@ -21,7 +21,8 @@ The GERT GUI is built for **Geologists, Geophysicists, and Reservoir Engineers**
 
 ## 2. Technical Stack
 * **Language:** **TypeScript** (Strict mode required for all components and stores).
-* **Framework:** SvelteKit (Static Adapter for bundled SPA delivery).
+* **Framework:** **Svelte 5** (Strictly use **Runes** for state management: `$state`, `$derived`, `$effect`. Do not use legacy Svelte 3/4 syntax).
+* **Router:** SvelteKit (Static Adapter for bundled SPA delivery).
 * **Styling:** Tailwind CSS + Skeleton UI.
 * **Plotting (Pluggable):**
     * **uPlot:** For high-performance info-vis, timeseries, and standard 1D line/scatter plots.
@@ -29,13 +30,24 @@ The GERT GUI is built for **Geologists, Geophysicists, and Reservoir Engineers**
     * **deck.gl:** For WebGL-powered 2D/3D spatial field visualizations, specifically optimized for large Parquet-backed datasets.
 * **Backend:** GERT FastAPI Server (`src/gert/server/router.py`).
 
-## 3. Project Structure & Organization
+## 3. Engineering Standards (Linter & Type Checking)
+To maintain the same high standards as the Python backend (ruff/mypy), the frontend strictly adheres to:
+
+*   **Linter & Formatter:** **Biome** (all-in-one tool for linting and formatting).
+    *   All code must be formatted and linted via `npx @biomejs/biome check --write`.
+*   **Type Safety:**
+    *   **TypeScript** (Strict mode enabled in `tsconfig.json`).
+    *   `svelte-check` must be run to verify types across `.svelte` and `.ts` files.
+    *   **Prohibited:** Use of `any`, `ts-ignore`, or `eslint-disable` (or Biome equivalents) without documented justification.
+*   **Commit Hooks:** Frontend checks must be integrated into the repository's `pre-commit` workflow (via `npx @biomejs/biome check`).
+
+## 4. Project Structure & Organization
 The frontend source lives in a dedicated root-level directory:
 * **Source Folder:** `/svelte_gui`
 * **Internal Structure:** Standard SvelteKit (Vite-based) project.
 * **Component Library:** Skeleton UI v2+ with Tailwind CSS.
 
-## 4. Distribution & Packaging
+## 5. Distribution & Packaging
 GERT aims for a "zero-config" web interface accessible via standard Python installation (`pip install gert`).
 
 * **Build Workflow:**
@@ -49,13 +61,13 @@ GERT aims for a "zero-config" web interface accessible via standard Python insta
     * Users launch the GUI via the CLI: `gert ui`.
     * This command starts the FastAPI server on a free port and automatically opens the user's default web browser using the Python `webbrowser` module.
 
-## 5. UI Layout & Navigation Architecture
+## 6. UI Layout & Navigation Architecture
 The GUI follows a "Workbench" pattern to support the Level 1-5 drill-down:
 * **Permanent Navigation Sidebar (Left):** A hierarchical Tree View allowing instant access to different Experiments and Executions.
 * **Contextual Detail Sidebar (Right):** A collapsible "Properties" pane that displays detailed JSON metadata or parameter values for whichever node is currently selected in the center workspace.
 * **Multi-Tab Workspace (Center):** The primary area for visualizations. Users can open multiple "Analysis" tabs (e.g., one for a deck.gl spatial grid, one for a uPlot misfit curve) and switch between them.
 
-## 4. Pluggable Plotting Architecture
+## 7. Pluggable Plotting Architecture
 To ensure high-performance interactivity while handling massive ensemble datasets, the GUI must utilize a library-agnostic plotting strategy:
 
 * **Generic Plot Container:** Plotting views must be implemented as a generic `PlotContainer.svelte` component. It manages resizing, cross-ensemble data orchestration, and common UI controls.
@@ -74,12 +86,32 @@ To ensure high-performance interactivity while handling massive ensemble dataset
   ```
 * **Real-Time Data Injection:** Plotters must support partial updates (appending points) to enable live-viewing while forward models are actively running.
 
-## 5. Communication & Resilience
+## 8. Communication & Resilience
 * **Log Streaming:** The frontend must consume the `/logs/stream` endpoint using the **ReadableStream API (fetch Reader)**. It should update a virtualized terminal component line-by-line without waiting for the full response to close.
 * **WebSocket Resilience:** The singleton WebSocket connection must implement an automatic **reconnection strategy** with exponential backoff. The UI should display a non-blocking "Disconnected/Reconnecting" toast/indicator when the stream is interrupted.
 * **Environment Configuration:** **Zero Hardcoded URLs.** All API and WebSocket base URLs must be resolved via a centralized `config.ts` or SvelteKit environment variables.
 
-## 6. SvelteKit Routing Structure
+## 9. Local Development Proxy
+To avoid CORS issues during development, Vite must be configured (`vite.config.ts`) to proxy requests to the GERT FastAPI server:
+```typescript
+export default defineConfig({
+	server: {
+		proxy: {
+			'/api': {
+				target: 'http://127.0.0.1:8000',
+				changeOrigin: true,
+				rewrite: (path) => path.replace(/^\/api/, '')
+			},
+			'/ws': {
+				target: 'ws://127.0.0.1:8000',
+				ws: true
+			}
+		}
+	}
+});
+```
+
+## 10. SvelteKit Routing Structure
 The application should follow a strict nested routing structure mirroring the backend REST API:
 
 ```text
@@ -103,7 +135,7 @@ src/routes/
 │                       └── +page.svelte          # Level 5: Step Details & Live Logs terminal
 ```
 
-## 7. Data & State Management
+## 11. Data & State Management
 * **Strict Iteration Separation:** The backend API (`/ensembles/{iteration}/...`) strictly separates iterations. The frontend is fully responsible for fetching Prior (Iteration 0) and Posterior (Iteration N) data independently, joining them locally, and overlaying them in the plotting components.
 * **Pagination & Slicing:** Never fetch raw Parquet blobs entirely into memory. Use query parameters (`?columns=X&realization=Y`) to fetch exact slices needed for the current chart.
 * **Real-Time State (WebSockets):**
@@ -111,15 +143,26 @@ src/routes/
   * Incoming events should update a global Svelte `writable` store, allowing progress bars and execution statuses to reactively update anywhere in the component tree without HTTP polling.
 * **Local Development:** Vite (`vite.config.ts`) must be configured to proxy `/api` and `/ws` requests to the local FastAPI server (default `http://127.0.0.1:8000`) to enable Hot Module Replacement (HMR) without CORS violations.
 
-## 9. Testing Strategy
+## 12. Required User Stories
+1. **Level 1 (Experiments):** As a user, I want to see an overview of all experiments in the workspace.
+2. **Level 2 (Executions):** As a user, within a specific experiment, I want to see a list of all historical and active executions. I want to be able to start, pause, or resume an execution, and filter overarching experiment logs by severity level.
+3. **Level 3 (Iterations):** As a user, within a specific execution, I want to see all data assimilation iterations (Prior, iter-1, etc.) and their convergence metrics (`ObservationSummary`).
+4. **Level 4 (Forward Model Steps):** As a user, within a specific iteration, I want to see all individual forward model steps for each realization.
+5. **Level 5 (Step Details & Logs):** As a user, when inspecting a specific step, I want to see runtime (duration), status, and live/historical logs (stdout/stderr via the `/logs/stream` endpoint).
+6. **Cross-Ensemble Plotting:** As a user, I want to plot parameters and responses across ensembles (defaulting to Prior vs. Posterior). I need to see this *while* the forward model is actively running.
+7. **Observation Overlay:** As a user, I want to see physical observations and simulated responses overlaid in the same view.
+8. **Convergence Tracking:** As a user, I want a plot of misfits tracked over successive iterations.
+9. **Spatial Grid Visualization:** As a user, if a grid is specified, I want to visualize the grid and see parameters/observations mapped spatially.
+
+## 13. Testing Strategy
 To ensure stability and reliability, the GERT Web GUI follows a strict testing hierarchy.
 
-### 9.1 Zero-Mock Integration Policy
+### 13.1 Zero-Mock Integration Policy
 **The GUI must never mock the GERT API.** Mocking the complex nested resource hierarchy and real-time WebSocket streams of GERT is brittle and difficult to maintain.
 * **Test Environment:** All integration tests must spin up a live GERT FastAPI server instance using a temporary `permanent_storage` directory.
 * **Data Source:** Tests should utilize standard experiment examples (e.g., `examples/simple`) to generate predictable state.
 
-### 9.2 End-to-End Testing (Playwright)
+### 13.2 End-to-End Testing (Playwright)
 The primary verification layer is **Playwright**.
 * **Navigation & Drill-down:** Verify that clicking nodes in the hierarchical Tree correctly updates the URL and mounts the corresponding nested routes.
 * **Execution Flow:** Verify that the "Start", "Pause", and "Resume" buttons correctly trigger backend transitions and reflect status changes in the UI.
@@ -127,15 +170,44 @@ The primary verification layer is **Playwright**.
 * **Log Streaming:** Verify that the virtualized terminal correctly tails active logs via the `ReadableStream` API.
 * **Plotting Stability:** Verify that canvas/WebGL elements (deck.gl) correctly mount and do not crash the browser when large Parquet slices are loaded.
 
-### 9.3 Unit Testing (Vitest)
+### 13.3 Unit Testing (Vitest)
 Unit tests focus on non-visual logic. Avoid "tautological" tests (e.g., testing if a button renders).
 * **Data Transformation:** Test the logic that joins Prior and Posterior iterations into the cross-ensemble plotter format.
 * **Plotter Dispatcher:** Verify that the dispatcher correctly selects `uPlot` vs `deck.gl` based on data dimensionality.
 * **Svelte Stores:** Test the WebSocket store logic, ensuring correct handling of "history replay" versus "live updates."
 
-### 9.4 Resilience & Edge Cases
+### 13.4 Resilience & Edge Cases
 * **Network Interruption:** Simulate a server crash during a Playwright run and verify the UI displays the "Reconnecting" indicator and successfully restores state upon server reboot.
 * **Concurrency:** Verify UI stability when receiving a high-frequency burst of WebSocket events (e.g., 100 realizations completing simultaneously).
 * **OOM Prevention:** Test the UI's behavior when a user attempts to select an excessively large column without appropriate slicing.
 
-## 10. Implementation Steps (Planned)
+## 14. Implementation Roadmap (Milestones)
+
+Building the "Scientific Workbench" follows a strict additive sequence.
+
+**⚠️ MANDATORY WORKFLOW:** For each milestone, implementation is considered incomplete until:
+1.  **Automated Tests:** Corresponding Vitest (logic) or Playwright (E2E) tests are implemented and passing.
+2.  **Linting/Typing:** `npm run check` and `npm run lint` pass with zero warnings.
+3.  **Visual Verification:** The UI is manually verified to adhere to the L0-L3 depth hierarchy and "Scientific Workbench" design language.
+
+### Phase A: The Shell & Design System
+*   **M1: Foundation Scaffolding:** Initialize `/svelte_gui` with SvelteKit (TypeScript), Tailwind CSS, and Skeleton UI. Set up the Static Adapter.
+*   **M2: Industrial Dark Theme:** Implement the L0-L3 surface hierarchy and JetBrains Mono typography. Verify optical nesting in a dummy layout.
+*   **M3: Layout Workbench:** Build the 3-pane responsive layout (Nav Sidebar, Multi-tab Workspace, Detail Drawer).
+
+### Phase B: Connectivity & Navigation
+*   **M4: API Proxy & Client:** Configure Vite proxy for local dev. Implement a centralized TypeScript API client with zero hardcoded URLs.
+*   **M5: Experiment Browser (L1):** Build the Experiment List view. Implement routing to `/experiments/[id]`.
+*   **M6: Execution Explorer (L2):** Build the Execution List for a selected experiment. Implement drill-down routing.
+
+### Phase C: Reactivity & Control
+*   **M7: WebSocket Pulse:** Implement the singleton WebSocket store with exponential backoff. Map events to a reactive Svelte store.
+*   **M8: Execution Control:** Implement Start/Pause/Resume buttons. Build the Virtualized Terminal component using the `ReadableStream` API for live logs.
+*   **M9: Iteration Dashboard (L3-4):** Build the hierarchical tree and macro-progress bars that update in real-time via the WebSocket store.
+
+### Phase D: High-Density Analysis
+*   **M10: Pluggable Plotting (uPlot):** Implement `PlotContainer.svelte` and the Plotter Dispatcher. Build the 1D uPlot engine for convergence/misfits.
+*   **M11: Spatial Analysis (deck.gl):** Implement the WebGL deck.gl engine. Verify 2D/3D field rendering using Parquet-sliced datasets.
+
+### Phase E: Production
+*   **M12: Packaging & CLI:** Update `pyproject.toml` for static asset inclusion. Implement the `gert ui` command in `__main__.py` to launch and open the browser.
