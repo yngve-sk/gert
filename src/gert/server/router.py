@@ -6,10 +6,12 @@ import json
 import logging
 import traceback
 from collections import defaultdict
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, cast
 
+import anyio
 from fastapi import (
     APIRouter,
     HTTPException,
@@ -1285,3 +1287,29 @@ async def execution_events_ws(
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
+
+
+@router.get("/logs/stream")
+async def stream_logs(request: Request) -> StreamingResponse:
+    """Stream application logs via Server-Sent Events (SSE)."""
+    log_file = anyio.Path("logs/gert.log")
+
+    async def log_generator() -> AsyncGenerator[str]:
+        if not await log_file.exists():
+            yield f"data: Log file not found at {log_file}\n\n"
+            return
+
+        async with await log_file.open("r", encoding="utf-8") as f:
+            # Skip tailing logic for async reads to keep the stream reliable
+            # We'll yield the stream as new lines come in, starting from EOF
+            await f.seek(0, 2)
+            while True:
+                if await request.is_disconnected():
+                    break
+                line = await f.readline()
+                if not line:
+                    await asyncio.sleep(0.5)
+                    continue
+                yield f"data: {line.strip()}\n\n"
+
+    return StreamingResponse(log_generator(), media_type="text/event-stream")
