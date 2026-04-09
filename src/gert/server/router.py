@@ -286,15 +286,17 @@ async def list_experiments() -> list[dict[str, str]]:
     summary="Create a new experiment",
     description="Registers an immutable experiment configuration and returns an ID.",
 )
-async def create_experiment(config: ExperimentConfig) -> ExperimentResponse:
+async def create_experiment(
+    config: ExperimentConfig,
+    experiment_id_override: Annotated[str | None, Query(alias="id")] = None,
+) -> ExperimentResponse:
     """Create a new experiment configuration."""
-    experiment_id = config.name
+    experiment_id = experiment_id_override or config.name
     ServerState.get().configs[experiment_id] = config
 
     # Save config to storage
-
     api = StorageAPI(base_storage_path=config.storage_base)
-    api.write_experiment_config(config)
+    api.write_experiment_config(config, experiment_id=experiment_id)
 
     return ExperimentResponse(id=experiment_id)
 

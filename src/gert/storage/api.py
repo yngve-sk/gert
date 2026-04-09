@@ -454,9 +454,14 @@ class StorageAPI:
         log_file = log_dir / f"{step_name}.{log_type}"
         log_file.write_text(content, encoding="utf-8")
 
-    def write_experiment_config(self, config: ExperimentConfig) -> None:
+    def write_experiment_config(
+        self,
+        config: ExperimentConfig,
+        experiment_id: str | None = None,
+    ) -> None:
         """Write the experiment config to disk."""
-        exp_dir = self._base_storage_path / config.name
+        exp_id = experiment_id or config.name
+        exp_dir = self._base_storage_path / exp_id
         exp_dir.mkdir(parents=True, exist_ok=True)
         config_file = exp_dir / "config.json"
         config_file.write_text(config.model_dump_json(indent=2))

@@ -1,14 +1,28 @@
 <script lang="ts">
-// biome-ignore lint/correctness/noUnusedImports: used in HTML template
-import PlotContainer from "$lib/components/plotting/PlotContainer.svelte";
-import type { PageData } from "./$types";
+	import type { PageData } from "./$types";
+	import PlotContainer from "$lib/components/plotting/PlotContainer.svelte";
+	import { startExperiment } from "$lib/api/client";
+	import { goto } from "$app/navigation";
 
-// biome-ignore lint/correctness/noUnusedVariables: used in render
-let { data }: { data: PageData } = $props();
+	// biome-ignore lint/correctness/noUnusedVariables: used in render
+	let { data }: { data: PageData } = $props();
+	let isStarting = $state(false);
 
-// biome-ignore lint/correctness/noUnusedVariables: used in render template
-function getStatusColor(status: string): string {
-	switch (status.toUpperCase()) {
+	async function handleStart() {
+		isStarting = true;
+		try {
+			const result = await startExperiment(data.experimentId);
+			// Redirect to the new execution inspector
+			goto(`/experiments/${data.experimentId}/executions/${result.execution_id}`);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : "Failed to start experiment");
+		} finally {
+			isStarting = false;
+		}
+	}
+
+	// biome-ignore lint/correctness/noUnusedVariables: used in render template
+	function getStatusColor(status: string): string {	switch (status.toUpperCase()) {
 		case "COMPLETED":
 			return "bg-success-500 text-black";
 		case "FAILED":
@@ -24,16 +38,34 @@ function getStatusColor(status: string): string {
 </script>
 
 <div class="flex flex-col gap-4 max-w-6xl w-full">
-	<header class="flex items-center gap-4">
-		<a href="/experiments" class="btn bg-surface-800 hover:bg-surface-700 text-surface-300 px-3 py-1.5 rounded border border-surface-700 text-sm transition-colors">
-			&larr; Back
-		</a>
-		<div>
-			<h1 class="text-2xl font-bold tracking-tight text-surface-50">
-				{data.config ? data.config.name : 'Experiment Details'}
-			</h1>
-			<p class="text-sm font-mono text-surface-400 mt-1">{data.experimentId}</p>
+	<header class="flex items-center justify-between gap-4">
+		<div class="flex items-center gap-4">
+			<a href="/experiments" class="btn bg-surface-800 hover:bg-surface-700 text-surface-300 px-3 py-1.5 rounded border border-surface-700 text-sm transition-colors">
+				&larr; Back
+			</a>
+			<div>
+				<h1 class="text-2xl font-bold tracking-tight text-surface-50">
+					{data.config ? data.config.name : 'Experiment Details'}
+				</h1>
+				<p class="text-sm font-mono text-surface-400 mt-1">{data.experimentId}</p>
+			</div>
 		</div>
+
+		<button 
+			class="btn bg-primary-500 hover:bg-primary-400 text-black font-bold px-4 py-2 rounded shadow-lg transition-all disabled:opacity-50 flex items-center gap-2"
+			onclick={handleStart}
+			disabled={isStarting}
+		>
+			{#if isStarting}
+				<div class="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+				Initializing...
+			{:else}
+				<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+					<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+				</svg>
+				New Run
+			{/if}
+		</button>
 	</header>
 
 	{#if data.error}

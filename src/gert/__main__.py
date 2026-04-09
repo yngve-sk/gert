@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 import uvicorn
+from pydantic import ValidationError
 
 from gert.discovery import (
     NoGertServerFoundError,
@@ -24,6 +25,7 @@ from gert.discovery import (
     wait_for_gert_server,
 )
 from gert.experiments.models import (
+    ExperimentConfig,
     ParameterMatrix,
 )
 from gert.monitor import start_monitor
@@ -549,6 +551,12 @@ def _parse_args() -> argparse.Namespace:
         description="Connects to the GERT server and opens the web GUI.",
     )
     ui_parser.add_argument(
+        "scan_paths",
+        nargs="*",
+        type=Path,
+        help="Optional paths to scan for GERT configuration files (JSON).",
+    )
+    ui_parser.add_argument(
         "--api-url",
         type=str,
         default=None,
@@ -564,15 +572,56 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _scan_for_configs(paths: list[Path]) -> dict[str, ExperimentConfig]:
+    """Recursively scan paths for GERT configuration files."""
+    configs: dict[str, ExperimentConfig] = {}
+    for path in paths:
+        if path.is_file():
+            if path.suffix == ".json":
+                try:
+                    config = ExperimentConfig.model_validate_json(
+                        path.read_text(encoding="utf-8"),
+                    )
+                    # ID = parent_folder + config_name
+                    # Using slash to mimic a hierarchy in the ID
+                    exp_id = f"{path.parent.name}/{config.name}"
+                    configs[exp_id] = config
+                except (ValidationError, ValueError, json.JSONDecodeError):
+                    continue
+        elif path.is_dir():
+            # Recursively scan directory
+            configs.update(_scan_for_configs(list(path.iterdir())))
+    return configs
+
+
 def _handle_ui_command(args: argparse.Namespace) -> None:
     """Launch the Web GUI server and open the browser."""
     logger = logging.getLogger("gert.cli")
+
+    # Scan for configs first
+    scanned_configs = _scan_for_configs(args.scan_paths)
+    if scanned_configs:
+        print(f"Scanned and found {len(scanned_configs)} GERT configurations.")
 
     client = httpx.Client()
     server_process = None
     try:
         # Implicitly discover or start a server
         server_process, resolved_api_url = _ensure_server(client, args.api_url)
+
+        # Register scanned configs with the server
+        for exp_id, config in scanned_configs.items():
+            try:
+                # Use the new endpoint with ID override
+                client.post(
+                    "/experiments",
+                    params={"id": exp_id},
+                    content=config.model_dump_json(),
+                    headers={"Content-Type": "application/json"},
+                )
+                logger.info(f"Registered experiment '{exp_id}' with server.")
+            except Exception:
+                logger.exception(f"Failed to register experiment '{exp_id}'")
 
         url = f"{resolved_api_url}/"
         logger.info(f"Opening GERT Web GUI at {url}")
