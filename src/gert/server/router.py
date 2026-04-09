@@ -15,6 +15,8 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi import Path as FastApiPath
@@ -1250,3 +1252,36 @@ async def get_observation_summary(
 
     api = StorageAPI(base_storage_path=config.storage_base)
     return api.get_observation_summary(config.name, execution_id, iteration)
+
+
+@router.websocket("/experiments/{experiment_id}/executions/{execution_id}/events")
+async def execution_events_ws(
+    websocket: WebSocket,
+    experiment_id: str,
+    execution_id: str,
+) -> None:
+    """WebSocket endpoint for live execution status events."""
+    await websocket.accept()
+
+    # Simple polling loop to push status
+    # In a production system, this would use a proper pubsub broker.
+    previous_state_json = ""
+    try:
+        while True:
+            try:
+                status_list = await get_execution_status(experiment_id, execution_id)
+                # Convert to dicts for JSON serialization
+                current_state = [s.model_dump() for s in status_list]
+                current_state_json = json.dumps(current_state)
+
+                # Only send if changed to save bandwidth
+                if current_state_json != previous_state_json:
+                    await websocket.send_text(current_state_json)
+                    previous_state_json = current_state_json
+
+            except HTTPException:
+                pass  # Config might not be loaded yet
+
+            await asyncio.sleep(1.0)
+    except WebSocketDisconnect:
+        pass

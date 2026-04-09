@@ -7,9 +7,8 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		proxy: {
-			"/experiments": "http://127.0.0.1:8000",
-			"/events": {
-				target: "ws://127.0.0.1:8000",
+			"/experiments": {
+				target: "http://127.0.0.1:8000",
 				ws: true,
 			},
 			"/logs": "http://127.0.0.1:8000",
