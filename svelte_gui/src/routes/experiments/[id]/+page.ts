@@ -9,13 +9,18 @@ export const load: PageLoad = async ({ params, fetch, url }) => {
 	const experimentId = params.id;
 
 	try {
+		// In the browser, always use the native fetch to bypass SvelteKit's SPA router
+		// intercepting API calls and incorrectly returning the index.html fallback.
+		let apiFetch = typeof window !== "undefined" ? window.fetch : fetch;
+
+		// When mounted under /_app/ in FastAPI, standard fetch() doesn't auto-resolve
+		// base paths in SPA mode the way it does under Vite. We force absolute routing logic.
 		const isFastApiMount = url.pathname.includes("/_app/");
 
-		let apiFetch = fetch;
-		if (isFastApiMount) {
+		if (isFastApiMount && typeof window !== "undefined") {
 			apiFetch = (input: RequestInfo | URL, init?: RequestInit) => {
 				const targetUrl = new URL(input.toString(), url.origin);
-				return fetch(targetUrl, init);
+				return window.fetch(targetUrl, init);
 			};
 		}
 

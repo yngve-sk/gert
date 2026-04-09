@@ -1,28 +1,28 @@
 <script lang="ts">
-	import type { PageData } from "./$types";
-	import PlotContainer from "$lib/components/plotting/PlotContainer.svelte";
-	import { startExperiment } from "$lib/api/client";
-	import { goto } from "$app/navigation";
+import { goto } from "$app/navigation";
+import { startExperiment } from "$lib/api/client";
+import type { PageData } from "./$types";
 
-	// biome-ignore lint/correctness/noUnusedVariables: used in render
-	let { data }: { data: PageData } = $props();
-	let isStarting = $state(false);
+// biome-ignore lint/correctness/noUnusedVariables: used in render
+let { data }: { data: PageData } = $props();
+let isStarting = $state(false);
 
-	async function handleStart() {
-		isStarting = true;
-		try {
-			const result = await startExperiment(data.experimentId);
-			// Redirect to the new execution inspector
-			goto(`/experiments/${data.experimentId}/executions/${result.execution_id}`);
-		} catch (e) {
-			alert(e instanceof Error ? e.message : "Failed to start experiment");
-		} finally {
-			isStarting = false;
-		}
+async function handleStart() {
+	isStarting = true;
+	try {
+		const result = await startExperiment(data.experimentId);
+		// Redirect to the new execution inspector
+		goto(`/experiments/${data.experimentId}/executions/${result.execution_id}`);
+	} catch (e) {
+		alert(e instanceof Error ? e.message : "Failed to start experiment");
+	} finally {
+		isStarting = false;
 	}
+}
 
-	// biome-ignore lint/correctness/noUnusedVariables: used in render template
-	function getStatusColor(status: string): string {	switch (status.toUpperCase()) {
+// biome-ignore lint/correctness/noUnusedVariables: used in render template
+function getStatusColor(status: string): string {
+	switch (status.toUpperCase()) {
 		case "COMPLETED":
 			return "bg-success-500 text-black";
 		case "FAILED":
@@ -51,7 +51,7 @@
 			</div>
 		</div>
 
-		<button 
+		<button
 			class="btn bg-primary-500 hover:bg-primary-400 text-black font-bold px-4 py-2 rounded shadow-lg transition-all disabled:opacity-50 flex items-center gap-2"
 			onclick={handleStart}
 			disabled={isStarting}
@@ -75,7 +75,7 @@
 		</aside>
 	{/if}
 
-	<div class="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-4 w-full items-start">
+	<div class="grid grid-cols-1 gap-4 w-full items-start">
 		<!-- L2 Container: Executions List -->
 		<section class="bg-surface-800 border border-surface-700 rounded-lg overflow-hidden shadow-lg w-full">
 			<header class="p-3 border-b border-surface-700 bg-surface-800 flex justify-between items-center">
@@ -141,16 +141,6 @@
 						</tbody>
 					</table>
 				{/if}
-			</div>
-		</section>
-
-		<!-- Right Column: Convergence Plot -->
-		<section class="bg-surface-800 border border-surface-700 rounded-lg shadow-lg flex flex-col h-full min-h-[300px]">
-			<header class="p-3 border-b border-surface-700 bg-surface-800">
-				<h2 class="text-sm font-bold text-surface-100">Convergence: {data.latestExecutionId ? data.latestExecutionId.substring(0,8) + '...' : 'Latest'}</h2>
-			</header>
-			<div class="flex-auto p-4 w-full overflow-hidden">
-				<PlotContainer summaries={data.summaries} />
 			</div>
 		</section>
 	</div>

@@ -1,7 +1,5 @@
 import asyncio
 import io
-import shutil
-from collections.abc import Generator
 from pathlib import Path
 
 import httpx
@@ -13,18 +11,12 @@ from gert.server.gert_server import gert_server_app
 from gert.storage.consolidation import ConsolidationWorker
 
 
-@pytest.fixture
-def clean_storage() -> Generator[None]:
-    """Fixture to clean up the storage directory before and after tests."""
-    storage_path = Path("./permanent_storage")
-    if storage_path.exists():
-        shutil.rmtree(storage_path)
-    yield
-    if storage_path.exists():
-        shutil.rmtree(storage_path)
+@pytest.fixture(autouse=True)
+def setup_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
 
 
-async def test_storage_integration_blast(clean_storage: None) -> None:
+async def test_storage_integration_blast() -> None:
     """Blast 100 concurrent payloads and verify consolidation."""
     client = TestClient(gert_server_app)
 
@@ -96,7 +88,7 @@ async def test_storage_integration_blast(clean_storage: None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_storage_integration_concurrent_blast(clean_storage: None) -> None:
+async def test_storage_integration_concurrent_blast() -> None:
     """Blast 100 payloads concurrently using httpx.AsyncClient."""
     # TestClient doesn't support true concurrency in the same way,
     # but we can use httpx.AsyncClient with the app.

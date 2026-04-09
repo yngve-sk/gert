@@ -1,11 +1,10 @@
 # ruff: noqa: S404, S603
 import io
 import json
-import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -15,22 +14,6 @@ import pytest
 
 from gert.discovery import wait_for_gert_server
 from gert.experiments import ExperimentConfig
-
-
-@pytest.fixture(autouse=True)
-def cleanup_storage() -> Generator[None]:
-    """Ensure a clean storage directory for the test."""
-    storage_path = Path("./permanent_storage")
-    workdirs_path = Path("./workdirs")
-    if storage_path.exists():
-        shutil.rmtree(storage_path)
-    if workdirs_path.exists():
-        shutil.rmtree(workdirs_path)
-    yield
-    if storage_path.exists():
-        shutil.rmtree(storage_path)
-    if workdirs_path.exists():
-        shutil.rmtree(workdirs_path)
 
 
 def test_triple_enif_da_convergence(

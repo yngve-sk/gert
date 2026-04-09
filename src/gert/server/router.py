@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi import Path as FastApiPath
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from gert.experiment_runner.experiment_orchestrator import ExperimentOrchestrator
@@ -163,7 +163,7 @@ def _rebuild_state_from_log(
     Raises:
         StateRecoveryError: If unable to reconstruct execution status.
     """
-    base = config.storage_base
+    base = Path(config.base_working_directory) / config.storage_base
     events_file = base / experiment_id / execution_id / "status_events.jsonl"
     if not events_file.exists():
         return False
@@ -1322,3 +1322,43 @@ async def stream_logs(request: Request) -> StreamingResponse:
                 yield f"data: {line.strip()}\n\n"
 
     return StreamingResponse(log_generator(), media_type="text/event-stream")
+
+
+@router.get("/experiments/{experiment_id}/executions/{execution_id}/logs")
+async def get_execution_logs(
+    experiment_id: str,
+    execution_id: str,
+) -> PlainTextResponse:
+    """Retrieve full logs for an execution, either active or finished.
+
+    Raises:
+        HTTPException: If the execution or log file is not found.
+    """
+    config = _recover_execution(experiment_id, execution_id)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+
+    # If it was moved to permanent storage, prefer that one
+    permanent_log = anyio.Path(
+        Path(config.base_working_directory)
+        / config.storage_base
+        / experiment_id
+        / "logs"
+        / "gert.log",
+    )
+
+    if await permanent_log.exists():
+        return PlainTextResponse(await permanent_log.read_text(encoding="utf-8"))
+
+    # Fallback to the live global log if not moved yet
+    live_log = anyio.Path("logs/gert.log")
+    if await live_log.exists():
+        return PlainTextResponse(await live_log.read_text(encoding="utf-8"))
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Log file not found for this execution",
+    )
