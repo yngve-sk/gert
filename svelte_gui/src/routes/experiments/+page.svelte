@@ -4,7 +4,7 @@ import type { PageData } from "./$types";
 // biome-ignore lint/correctness/noUnusedVariables: used in render
 let { data }: { data: PageData } = $props();
 </script>
-<div class="flex flex-col gap-4 max-w-4xl">
+<div class="flex flex-col gap-4">
 	<header>
 		<h1 class="text-2xl font-bold tracking-tight text-surface-50">Experiment Browser</h1>
 		<p class="text-sm text-surface-400 mt-1">Select an experiment to view its executions and parameters.</p>

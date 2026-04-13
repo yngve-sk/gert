@@ -7,7 +7,8 @@ export interface ExperimentConfig {
 	name: string;
 	base_working_directory: string;
 	updates?: any[];
-	// Omitted other fields for brevity as we mainly need the name right now
+	forward_model_steps?: any[];
+	observations?: any[];
 }
 
 export interface ExecutionState {
@@ -29,6 +30,26 @@ export interface ObservationSummary {
 	// details omitted for brevity in UI
 }
 
+export interface SystemInfo {
+	version: string;
+	server_url: string;
+	start_time: string;
+	num_experiments: number;
+	num_active_executions: number;
+	total_events: number;
+}
+
+export interface UpdateMetadata {
+	status: string;
+	algorithm_name: string;
+	configuration: Record<string, any>;
+	metrics: Record<string, any>;
+	error?: string | null;
+	duration_seconds?: number | null;
+	start_time?: string | null;
+	end_time?: string | null;
+}
+
 /**
  * Fetch all experiments from the API.
  * Thanks to the Vite proxy, we can use the relative path '/experiments'
@@ -39,6 +60,19 @@ export async function listExperiments(
 	const response = await fetchInstance("/experiments");
 	if (!response.ok) {
 		throw new Error(`Failed to fetch experiments: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Fetch general system information.
+ */
+export async function getSystemInfo(
+	fetchInstance: typeof fetch = fetch,
+): Promise<SystemInfo> {
+	const response = await fetchInstance("/system/info");
+	if (!response.ok) {
+		throw new Error(`Failed to fetch system info: ${response.statusText}`);
 	}
 	return response.json();
 }
@@ -82,13 +116,12 @@ export async function pauseExecution(
 	experimentId: string,
 	executionId: string,
 	fetchInstance: typeof fetch = fetch,
+	force = false,
 ): Promise<void> {
-	const response = await fetchInstance(
-		`/experiments/${experimentId}/executions/${executionId}/pause`,
-		{
-			method: "POST",
-		},
-	);
+	const url = `/experiments/${experimentId}/executions/${executionId}/pause${force ? "?force=true" : ""}`;
+	const response = await fetchInstance(url, {
+		method: "POST",
+	});
 	if (!response.ok) {
 		throw new Error(`Failed to pause execution: ${response.statusText}`);
 	}
@@ -163,6 +196,73 @@ export async function getExecutionStatus(
 		throw new Error(`Failed to fetch execution status: ${response.statusText}`);
 	}
 	return response.json();
+}
+
+export interface StepLogs {
+	stdout: string;
+	stderr: string;
+}
+
+/**
+ * Fetch the metadata for a specific mathematical update step.
+ */
+export async function getUpdateMetadata(
+	experimentId: string,
+	executionId: string,
+	iteration: number,
+	fetchInstance: typeof fetch = fetch,
+): Promise<UpdateMetadata> {
+	const response = await fetchInstance(
+		`/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/update/metadata`,
+	);
+	if (!response.ok) {
+		throw new Error(`Failed to fetch update metadata: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+/**
+ * Fetch logs for a specific forward model step.
+ */
+export async function getStepLogs(
+	experimentId: string,
+	executionId: string,
+	iteration: number,
+	realizationId: number,
+	stepName: string,
+	fetchInstance: typeof fetch = fetch,
+): Promise<StepLogs> {
+	const response = await fetchInstance(
+		`/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/realizations/${realizationId}/steps/${stepName}/logs`,
+	);
+	if (!response.ok) {
+		throw new Error(`Failed to fetch step logs: ${response.statusText}`);
+	}
+	return response.json();
+}
+
+export async function fetchParquet(
+	experimentId: string,
+	executionId: string,
+	iteration: number,
+	dataType: "responses" | "parameters",
+	fetchInstance: typeof fetch = fetch,
+): Promise<any[]> {
+	const response = await fetchInstance(
+		`/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/${dataType}`,
+		{
+			headers: {
+				Accept: "application/json",
+			},
+		}
+	);
+	if (!response.ok) {
+		throw new Error(`Failed to fetch ${dataType}: ${response.statusText}`);
+	}
+
+	const text = await response.text();
+	const lines = text.trim().split("\n");
+	return lines.map(l => JSON.parse(l));
 }
 
 /**

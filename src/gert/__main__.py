@@ -84,11 +84,16 @@ def _load_config(config_path: Path) -> dict[str, Any]:
     return config_data
 
 
-def _ensure_server(
+def _ensure_server(  # noqa: C901
     client: httpx.Client,
     api_url: str | None,
+    force_port: int | None = None,
 ) -> tuple[subprocess.Popen[Any] | None, str]:
-    """Ensure the GERT server is running, starting it if necessary."""
+    """Ensure the GERT server is running, starting it if necessary.
+
+    Raises:
+        NoGertServerFoundError: If forcing a specific port but no server is found.
+    """
     if api_url:
         try:
             client.base_url = api_url
@@ -99,26 +104,47 @@ def _ensure_server(
             return None, api_url
 
     try:
+        # If we have a specific port requirement, check if a server is already on it
+        if force_port is not None:
+            url = f"http://127.0.0.1:{force_port}"
+            client.base_url = url
+            try:
+                client.get("/docs")
+            except httpx.ConnectError as err:
+                msg = "No server on required port."
+                raise NoGertServerFoundError(msg) from err
+            else:
+                print(f"Found running GERT server matching required port at {url}")
+                return None, url
+
         info = find_gert_server()
         url = info.base_url
         print(f"Found running GERT server at {url}")
     except NoGertServerFoundError:
         print("No running GERT server found. Starting temporary server...")
-        port = get_free_port()
+        port = force_port if force_port is not None else get_free_port()
         host = "127.0.0.1"
         url = f"http://{host}:{port}"
         client.base_url = url
 
         server_process = subprocess.Popen(
             [sys.executable, "-m", "gert", "server", "--port", str(port)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
         try:
-            wait_for_gert_server(timeout=15)
+            wait_for_gert_server(timeout=10)
         except NoGertServerFoundError:
             print("Failed to start temporary server.", file=sys.stderr)
+            if server_process.poll() is not None:
+                stdout, stderr = server_process.communicate()
+                print(f"Server exited with code {server_process.returncode}")
+                if stdout:
+                    print(f"Stdout:\n{stdout}")
+                if stderr:
+                    print(f"Stderr:\n{stderr}")
             server_process.terminate()
             sys.exit(1)
 
@@ -592,6 +618,11 @@ def _parse_args() -> argparse.Namespace:
         help="Explicit URL of the GERT server to connect to (overrides discovery).",
     )
     ui_parser.add_argument(
+        "--hmr",
+        action="store_true",
+        help="Run the SvelteKit development server with HMR enabled (dev only).",
+    )
+    ui_parser.add_argument(
         "--server-id",
         type=str,
         default=None,
@@ -672,7 +703,7 @@ def _scan_for_configs(paths: list[Path]) -> dict[str, ExperimentConfig]:
     return _resolve_ids_and_handle_collisions(found)
 
 
-def _handle_ui_command(args: argparse.Namespace) -> None:
+def _handle_ui_command(args: argparse.Namespace) -> None:  # noqa: C901
     """Launch the Web GUI server and open the browser."""
     logger = logging.getLogger("gert.cli")
 
@@ -683,9 +714,36 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
 
     client = httpx.Client()
     server_process = None
+    vite_process = None
     try:
-        # Implicitly discover or start a server
-        server_process, resolved_api_url = _ensure_server(client, args.api_url)
+        is_hmr = getattr(args, "hmr", False)
+
+        # Implicitly discover or start a server.
+        # If HMR is requested, we MUST force port 8000 because vite proxy expects it.
+        server_process, resolved_api_url = _ensure_server(
+            client,
+            args.api_url,
+            force_port=8000 if is_hmr else None,
+        )
+
+        if is_hmr:
+            # We are in dev mode, start Vite
+            gui_dir = Path(__file__).parent.parent.parent / "svelte_gui"
+            if not (gui_dir / "package.json").exists():
+                print(
+                    f"❌ Cannot run with --hmr: svelte_gui not found at {gui_dir}.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            print("🚀 Starting SvelteKit HMR development server...")
+            vite_process = subprocess.Popen(
+                ["npm", "run", "dev"],  # noqa: S607
+                cwd=str(gui_dir),
+            )
+            # Give Vite a moment to bind to 5173
+            time.sleep(2)
+            resolved_api_url = "http://localhost:5173"
 
         # Register scanned configs with the server
         last_registered_exp_id = None
@@ -708,15 +766,19 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
         else:
             url = f"{resolved_api_url}/"
 
-        logger.info(f"Opening GERT Web GUI at {url}")
-        print(f"Opening GERT Web GUI at {url}")
+        # Prevent browser open during tests
+        if os.environ.get("BROWSER") != "none":
+            logger.info(f"Opening GERT Web GUI at {url}")
+            print(f"Opening GERT Web GUI at {url}")
+            webbrowser.open(url)
 
-        webbrowser.open(url)
-
-        if server_process:
+        if server_process or vite_process:
             print("Running temporary GERT server. Press Ctrl+C to stop.")
             # Block until the user kills the process
-            server_process.wait()
+            if server_process:
+                server_process.wait()
+            if vite_process:
+                vite_process.wait()
 
     except KeyboardInterrupt:
         print("\nShutting down GERT UI server...")
@@ -728,6 +790,9 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
         if server_process:
             server_process.terminate()
             server_process.wait()
+        if vite_process:
+            vite_process.terminate()
+            vite_process.wait()
 
 
 def main() -> None:

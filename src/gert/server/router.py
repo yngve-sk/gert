@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import logging
+import shutil
 import traceback
 from collections import defaultdict
 from collections.abc import AsyncGenerator
@@ -17,6 +18,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -33,13 +35,21 @@ from gert.experiments.models import (
     ObservationSummary,
     UpdateMetadata,
 )
-from gert.server.models import ConnectionInfo
+from gert.server.models import ConnectionInfo, SystemInfo
 from gert.storage.api import StorageAPI
 from gert.storage.ingestion import IngestionReceiver
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["experiments"])
+
+SERVER_START_TIME = datetime.now(UTC).isoformat()
+
+
+@router.get("/health", summary="Healthcheck endpoint")
+async def health_check() -> dict[str, str]:
+    """Return a simple OK status."""
+    return {"status": "ok"}
 
 
 @router.get(
@@ -62,6 +72,47 @@ async def get_connection_info(request: Request) -> ConnectionInfo:
             detail="Connection info not yet available.",
         )
     return cast("ConnectionInfo", request.app.state.connection_info)
+
+
+@router.get(
+    "/system/info",
+    summary="Get general system information",
+    description="Returns version, server URL, start time, and aggregate metrics.",
+)
+async def get_system_info(request: Request) -> SystemInfo:
+    """Return general system information."""
+    if (
+        not hasattr(request.app.state, "connection_info")
+        or not request.app.state.connection_info
+    ):
+        # Fallback for when connection info isn't fully set yet
+        base_url = str(request.base_url)
+        version = "0.1.0"
+    else:
+        conn = cast("ConnectionInfo", request.app.state.connection_info)
+        base_url = conn.base_url
+        version = conn.version
+
+    state = ServerState.get()
+
+    # Calculate unique experiments (both in-memory and on disk)
+    # We can reuse some logic from list_experiments but more concisely
+    api = StorageAPI(base_storage_path=Path("./permanent_storage"))
+    stored = api.list_experiments()
+    all_exp_ids = set(state.configs.keys()) | {exp_id for exp_id, _ in stored}
+
+    active_executions = [
+        e for e in state.executions.values() if e.overarching_status == "RUNNING"
+    ]
+
+    return SystemInfo(
+        version=version,
+        server_url=base_url,
+        start_time=SERVER_START_TIME,
+        num_experiments=len(all_exp_ids),
+        num_active_executions=len(active_executions),
+        total_events=state.total_events,
+    )
 
 
 class StepStatus(BaseModel):
@@ -122,6 +173,7 @@ class ExecutionData:
         self.orchestrator: ExperimentOrchestrator | None = None
         self.overarching_status: str = "RUNNING"
         self.error: str | None = None
+        self.log_handler: logging.Handler | None = None
 
 
 class ServerState:
@@ -142,6 +194,7 @@ class ServerState:
         self.consolidation_tasks: set[asyncio.Task[Any]] = set()
         self.experiment_run_counts: dict[str, int] = defaultdict(int)
         self.latest_execution_id: dict[str, str] = {}
+        self.total_events: int = 0
 
     def clear(self) -> None:
         """Clear all in-memory state (useful for testing)."""
@@ -151,6 +204,7 @@ class ServerState:
         self.consolidation_tasks.clear()
         self.experiment_run_counts.clear()
         self.latest_execution_id.clear()
+        self.total_events = 0
 
 
 def _rebuild_state_from_log(
@@ -295,7 +349,9 @@ async def create_experiment(
     ServerState.get().configs[experiment_id] = config
 
     # Save config to storage
-    api = StorageAPI(base_storage_path=config.storage_base)
+    api = StorageAPI(
+        base_storage_path=Path(config.base_working_directory) / config.storage_base,
+    )
     api.write_experiment_config(config, experiment_id=experiment_id)
 
     return ExperimentResponse(id=experiment_id)
@@ -342,10 +398,10 @@ async def pause_execution(
 
 @router.post(
     "/experiments/{experiment_id}/executions/{execution_id}/resume",
-    summary="Resume a paused or crashed execution",
+    summary="Resume execution",
     description="Reads the state from permanent storage and resumes the orchestrator.",
 )
-async def resume_execution(
+async def resume_execution(  # noqa: C901
     experiment_id: str,
     execution_id: str,
     request: Request,
@@ -409,6 +465,18 @@ async def resume_execution(
     exec_data.orchestrator = orchestrator
     _update_realization_status(execution_id, -1, -1, "RUNNING")
 
+    # Set up execution-specific logging
+    base = Path(config.base_working_directory) / config.storage_base
+    exec_dir = base / experiment_id / execution_id
+    exec_dir.mkdir(parents=True, exist_ok=True)
+    exec_log_file = exec_dir / "execution.log"
+
+    handler = logging.FileHandler(exec_log_file, mode="a")
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+    handler.setFormatter(formatter)
+    logging.getLogger().addHandler(handler)
+    exec_data.log_handler = handler
+
     async def _run_wrapped() -> None:
         try:
             await orchestrator.run_experiment()
@@ -423,6 +491,10 @@ async def resume_execution(
             exec_data.error = error_msg
             logger.exception("Background execution failed")
         finally:
+            if exec_data.log_handler:
+                logging.getLogger().removeHandler(exec_data.log_handler)
+                exec_data.log_handler.close()
+                exec_data.log_handler = None
             exec_data.orchestrator = None
 
     task = asyncio.create_task(_run_wrapped())
@@ -454,7 +526,9 @@ async def get_manifest(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    api = StorageAPI(base_storage_path=config.storage_base)
+    api = StorageAPI(
+        base_storage_path=Path(config.base_working_directory) / config.storage_base,
+    )
     return api.get_manifest(config.name, execution_id, iteration)
 
 
@@ -578,6 +652,25 @@ async def start_experiment(
     exec_data = ExecutionData(config)
     exec_data.orchestrator = orchestrator
     exec_data.overarching_status = "RUNNING"
+
+    # Set up execution-specific logging
+    base = Path(config.base_working_directory) / config.storage_base
+    exec_dir = base / experiment_id / execution_id
+    exec_dir.mkdir(parents=True, exist_ok=True)
+    exec_log_file = exec_dir / "execution.log"
+
+    global_log = anyio.Path("logs/gert.log")
+    if await global_log.exists():
+        shutil.copy2("logs/gert.log", exec_log_file)
+    else:
+        exec_log_file.touch()
+
+    handler = logging.FileHandler(exec_log_file, mode="a")
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+    handler.setFormatter(formatter)
+    logging.getLogger().addHandler(handler)
+    exec_data.log_handler = handler
+
     server_state.executions[execution_id] = exec_data
     if execution_id not in server_state.experiment_executions[experiment_id]:
         server_state.experiment_executions[experiment_id].append(execution_id)
@@ -607,6 +700,10 @@ async def start_experiment(
             # Make sure it gets printed on the server side as well
             logger.exception("Background execution failed")
         finally:
+            if exec_data.log_handler:
+                logging.getLogger().removeHandler(exec_data.log_handler)
+                exec_data.log_handler.close()
+                exec_data.log_handler = None
             exec_data.orchestrator = None
 
     # 1. Execute the orchestrator loop strictly in the background (Fire and Forget)
@@ -892,6 +989,8 @@ def _apply_status_event(
 ) -> None:
     """Helper to apply a status event to the in-memory state."""
     server_state = ServerState.get()
+    server_state.total_events += 1
+
     exec_data = server_state.executions.get(execution_id)
     if not exec_data:
         return
@@ -955,11 +1054,14 @@ def _update_realization_status(
 
     # Append to disk log
     experiment_id = exec_data.config.name
-    base = (
-        exec_data.config.storage_base
-        if exec_data.config
-        else Path("./permanent_storage")
-    )
+    if exec_data.config:
+        base = (
+            Path(exec_data.config.base_working_directory)
+            / exec_data.config.storage_base
+        )
+    else:
+        base = Path("./permanent_storage")
+
     events_file = base / experiment_id / execution_id / "status_events.jsonl"
 
     # Ensure parent directory exists.
@@ -1031,7 +1133,9 @@ async def get_step_logs(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    api = StorageAPI(base_storage_path=config.storage_base)
+    api = StorageAPI(
+        base_storage_path=Path(config.base_working_directory) / config.storage_base,
+    )
     try:
         stdout = api.get_step_log(
             config.name,
@@ -1094,13 +1198,16 @@ async def ingest_data(
 @router.get(
     "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/parameters",
     summary="Retrieve parameter matrix as Parquet stream",
-    description="Returns the parameter matrix for a given execution and iteration "
-    "as an Apache Parquet binary stream. Ensure the client is configured to "
-    "receive and process application/vnd.apache.parquet Content-Type.",
+    description="Returns the parameter matrix for a given execution and iteration. "
+    "You can request JSON using Accept: application/json.",
+    response_model=None,
     responses={
         200: {
-            "content": {"application/vnd.apache.parquet": {}},
-            "description": "The parameter matrix in Parquet format.",
+            "content": {
+                "application/vnd.apache.parquet": {},
+                "application/json": {},
+            },
+            "description": "The parameter matrix in Parquet or JSON format.",
         },
     },
 )
@@ -1108,8 +1215,9 @@ async def get_parameters(
     experiment_id: str,
     execution_id: str,
     iteration: int,
-) -> StreamingResponse:
-    """Retrieve the parameter matrix as a Parquet stream.
+    request: Request,
+) -> StreamingResponse | Response:
+    """Retrieve the parameter matrix as a Parquet stream or JSON.
 
     Raises:
         HTTPException: If the experiment is not found.
@@ -1121,13 +1229,21 @@ async def get_parameters(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    api = StorageAPI(base_storage_path=config.storage_base)
+    api = StorageAPI(
+        base_storage_path=Path(config.base_working_directory) / config.storage_base,
+    )
     try:
         df = api.get_parameters(
             experiment_id=config.name,
             execution_id=execution_id,
             iteration=iteration,
         )
+
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            json_str = df.write_ndjson()
+            return Response(content=json_str, media_type="application/x-ndjson")
+
         buffer = io.BytesIO()
         df.write_parquet(buffer)
         buffer.seek(0)
@@ -1151,12 +1267,15 @@ async def get_parameters(
     "/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
     summary="Retrieve consolidated responses as Parquet stream",
     description="Returns all consolidated responses for a given execution "
-    "and iteration as an Apache Parquet binary stream. Ensure the client is "
-    "configured to receive and process application/vnd.apache.parquet Content-Type.",
+    "and iteration. You can request JSON using Accept: application/json.",
+    response_model=None,
     responses={
         200: {
-            "content": {"application/vnd.apache.parquet": {}},
-            "description": "The consolidated responses in Parquet format.",
+            "content": {
+                "application/vnd.apache.parquet": {},
+                "application/json": {},
+            },
+            "description": "The consolidated responses in Parquet or JSON format.",
         },
     },
 )
@@ -1164,8 +1283,9 @@ async def get_responses(
     experiment_id: str,
     execution_id: str,
     iteration: int,
-) -> StreamingResponse:
-    """Retrieve consolidated responses as a Parquet stream.
+    request: Request,
+) -> StreamingResponse | Response:
+    """Retrieve consolidated responses.
 
     Raises:
         HTTPException: If the experiment or data is not found.
@@ -1177,13 +1297,21 @@ async def get_responses(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    api = StorageAPI(base_storage_path=config.storage_base)
+    api = StorageAPI(
+        base_storage_path=Path(config.base_working_directory) / config.storage_base,
+    )
     try:
         df = api.get_responses(
             experiment_id=config.name,
             execution_id=execution_id,
             iteration=iteration,
         )
+
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            json_str = df.write_ndjson()
+            return Response(content=json_str, media_type="application/x-ndjson")
+
         buffer = io.BytesIO()
         df.write_parquet(buffer)
         buffer.seek(0)
@@ -1225,7 +1353,9 @@ async def get_update_metadata(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    api = StorageAPI(base_storage_path=config.storage_base)
+    api = StorageAPI(
+        base_storage_path=Path(config.base_working_directory) / config.storage_base,
+    )
     try:
         return api.get_update_metadata(
             experiment_id=config.name,
@@ -1261,7 +1391,9 @@ async def get_observation_summary(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    api = StorageAPI(base_storage_path=config.storage_base)
+    api = StorageAPI(
+        base_storage_path=Path(config.base_working_directory) / config.storage_base,
+    )
     return api.get_observation_summary(config.name, execution_id, iteration)
 
 
@@ -1282,7 +1414,7 @@ async def execution_events_ws(
             try:
                 status_list = await get_execution_status(experiment_id, execution_id)
                 # Convert to dicts for JSON serialization
-                current_state = [s.model_dump() for s in status_list]
+                current_state = [s.model_dump(mode="json") for s in status_list]
                 current_state_json = json.dumps(current_state)
 
                 # Only send if changed to save bandwidth
@@ -1292,26 +1424,42 @@ async def execution_events_ws(
 
             except HTTPException:
                 pass  # Config might not be loaded yet
+            except Exception:
+                logger.exception("WebSocket error")
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.1)
     except WebSocketDisconnect:
         pass
 
 
-@router.get("/logs/stream")
-async def stream_logs(request: Request) -> StreamingResponse:
+@router.get("/experiments/{experiment_id}/executions/{execution_id}/logs/stream")
+async def stream_logs(
+    request: Request,
+    experiment_id: str,
+    execution_id: str,
+) -> StreamingResponse:
     """Stream application logs via Server-Sent Events (SSE)."""
-    log_file = anyio.Path("logs/gert.log")
+    config = _recover_execution(experiment_id, execution_id)
+    if not config:
+        log_file = anyio.Path("logs/gert.log")
+    else:
+        log_file = anyio.Path(
+            Path(config.base_working_directory)
+            / config.storage_base
+            / experiment_id
+            / execution_id
+            / "execution.log",
+        )
 
     async def log_generator() -> AsyncGenerator[str]:
-        if not await log_file.exists():
-            yield f"data: Log file not found at {log_file}\n\n"
-            return
+        while not await log_file.exists():
+            if await request.is_disconnected():
+                return
+            yield "data: [GERT Server] Waiting for execution to begin logging...\n\n"
+            await asyncio.sleep(1.0)
 
         async with await log_file.open("r", encoding="utf-8") as f:
-            # Skip tailing logic for async reads to keep the stream reliable
-            # We'll yield the stream as new lines come in, starting from EOF
-            await f.seek(0, 2)
+            yield "data: [GERT] Connected to log stream...\n\n"
             while True:
                 if await request.is_disconnected():
                     break
@@ -1321,7 +1469,15 @@ async def stream_logs(request: Request) -> StreamingResponse:
                     continue
                 yield f"data: {line.strip()}\n\n"
 
-    return StreamingResponse(log_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        log_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/experiments/{experiment_id}/executions/{execution_id}/logs")
@@ -1341,19 +1497,29 @@ async def get_execution_logs(
             detail=f"Execution '{execution_id}' not found",
         )
 
-    # If it was moved to permanent storage, prefer that one
-    permanent_log = anyio.Path(
+    exec_log = anyio.Path(
+        Path(config.base_working_directory)
+        / config.storage_base
+        / experiment_id
+        / execution_id
+        / "execution.log",
+    )
+
+    if await exec_log.exists():
+        return PlainTextResponse(await exec_log.read_text(encoding="utf-8"))
+
+    # Legacy fallback: some older runs might have logs stored as logs/gert.log
+    legacy_log = anyio.Path(
         Path(config.base_working_directory)
         / config.storage_base
         / experiment_id
         / "logs"
         / "gert.log",
     )
+    if await legacy_log.exists():
+        return PlainTextResponse(await legacy_log.read_text(encoding="utf-8"))
 
-    if await permanent_log.exists():
-        return PlainTextResponse(await permanent_log.read_text(encoding="utf-8"))
-
-    # Fallback to the live global log if not moved yet
+    # Fallback to the live global log if all else fails
     live_log = anyio.Path("logs/gert.log")
     if await live_log.exists():
         return PlainTextResponse(await live_log.read_text(encoding="utf-8"))

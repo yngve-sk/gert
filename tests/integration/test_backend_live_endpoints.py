@@ -13,21 +13,35 @@ app = create_gert_server()
 
 def test_logs_stream_endpoint() -> None:
     """Verify that the SSE logs stream endpoint returns a 200 OK and valid event stream."""
-    with TestClient(app) as client, client.stream("GET", "/logs/stream") as response:
-        assert response.status_code == 200
-        assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    configs = _scan_for_configs([Path("examples/simple")])
+    exp_id, _ = next(iter(configs.items()))
 
-        # Read just the first chunk to verify it's working
-        lines = []
-        for line in response.iter_lines():
-            if line:
-                lines.append(line)
-            if len(lines) >= 1:
-                break
+    with TestClient(app) as client:
+        res = client.post("/experiments", json=configs[exp_id].model_dump())
+        assert res.status_code == 201
 
-        # Note: If logs/gert.log is empty, it might yield 'data: Log file not found'
-        assert len(lines) > 0
-        assert lines[0].startswith("data: ")
+        start_res = client.post(f"/experiments/{exp_id}/start")
+        exec_id = start_res.json()["execution_id"]
+
+        with client.stream(
+            "GET",
+            f"/experiments/{exp_id}/executions/{exec_id}/logs/stream",
+        ) as response:
+            assert response.status_code == 200
+            assert (
+                response.headers["content-type"] == "text/event-stream; charset=utf-8"
+            )
+
+            # Read just the first chunk to verify it's working
+            lines = []
+            for line in response.iter_lines():
+                if line:
+                    lines.append(line)
+                if len(lines) >= 1:
+                    break
+
+            assert len(lines) > 0
+            assert lines[0].startswith("data: ")
 
 
 def test_websocket_pulse_endpoint() -> None:

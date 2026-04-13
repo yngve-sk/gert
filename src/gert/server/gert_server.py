@@ -31,7 +31,6 @@ def configure_server_logging() -> None:
         handlers=[
             logging.FileHandler("logs/gert.log", mode="w"),
             logging.FileHandler("logs/combined.log", mode="a"),
-            logging.StreamHandler(),
         ],
         force=True,  # Ensure we override any existing handlers
     )
@@ -76,9 +75,16 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
         ) -> FileResponse | JSONResponse:
             """Serve the SvelteKit SPA fallback for unhandled routes."""
             path = request.url.path
+            accept = request.headers.get("accept", "")
 
-            # If the request is explicitly an API call, preserve the 404 JSON response
-            if path.startswith(("/experiments", "/logs", "/connection-info")):
+            # If it's a browser navigation request, always serve the SPA
+            if "text/html" in accept:
+                return FileResponse(static_dir / "index.html")
+
+            # Otherwise, preserve the 404 JSON response for API calls
+            if path.startswith(
+                ("/experiments", "/logs", "/system", "/connection-info"),
+            ):
                 detail = "Not Found"
                 if hasattr(exc, "detail"):
                     detail = exc.detail
@@ -90,7 +96,7 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
             if physical_path.is_file():
                 return FileResponse(physical_path)
 
-            # Otherwise, fallback to the SPA index.html to let Svelte router decide.
+            # Ultimate fallback to SPA index.html
             return FileResponse(static_dir / "index.html")
 
     return gert_server_app

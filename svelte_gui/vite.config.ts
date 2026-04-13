@@ -5,13 +5,23 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
+	build: {
+		sourcemap: true,
+	},
 	server: {
 		proxy: {
 			"/experiments": {
 				target: "http://127.0.0.1:8000",
 				ws: true,
+				bypass: (req, res, options) => {
+					// Don't proxy HTML requests (page navigations), let SvelteKit handle them
+					if (req.headers.accept && req.headers.accept.includes("text/html")) {
+						return req.url;
+					}
+				}
 			},
 			"/logs": "http://127.0.0.1:8000",
+			"/system": "http://127.0.0.1:8000",
 		},
 	},
 	test: {

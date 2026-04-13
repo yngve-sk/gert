@@ -63,9 +63,17 @@ GERT aims for a "zero-config" web interface accessible via standard Python insta
 
 ## 6. UI Layout & Navigation Architecture
 The GUI follows a "Workbench" pattern to support the Level 1-5 drill-down:
-* **Permanent Navigation Sidebar (Left):** A hierarchical Tree View allowing instant access to different Experiments and Executions.
-* **Contextual Detail Sidebar (Right):** A collapsible "Properties" pane that displays detailed JSON metadata or parameter values for whichever node is currently selected in the center workspace.
-* **Multi-Tab Workspace (Center):** The primary area for visualizations. Users can open multiple "Analysis" tabs (e.g., one for a deck.gl spatial grid, one for a uPlot misfit curve) and switch between them.
+* **Permanent Navigation Sidebar (Left):** A hierarchical Tree View allowing instant access to different Experiments and Executions. Inside an Execution Inspector, this acts as the **Ensembles Dashboard**:
+    * It displays a selectable, expandable list of Ensembles (Iterations) and interleaves "Update" steps.
+    * Ensembles expand to show Realizations, which expand to show Forward Model Steps (sorted newest/currently executing at top, oldest at bottom).
+    * Includes a **Server Status Panel** at the bottom showing uptime (incrementing in real-time), experiment counts, and versioning. This panel polls a dedicated `GET /health` endpoint every 5 seconds to provide a visual heartbeat/connection indicator.
+* **Multi-Tab Workspace (Center):** The primary area for visualizations. Users can open multiple "Analysis" tabs and switch between them:
+    * **Console:** Live and static log stream.
+    * **Update Summary:** A global experiment overview visible when no specific node is selected. It features a lightweight `uPlot` line chart displaying algorithm convergence over time (e.g., Avg Misfit vs Variance). The X-axis represents discrete mathematical updates, formatted explicitly as `0→1`, `1→2`.
+    * **Realization Status:** An aggregate view of realization progress bars. Filters to a specific Ensemble if one is selected in the sidebar, or shows all if none/all are selected. Realizations are shown as progress bars with text indicating `[Completed] / [Total]` steps, and the truncated name (4 chars, full on hover) of the active step. Selecting a realization syncs with the sidebar.
+    * **Update Info:** Appears dynamically when an Update step is selected from the Ensembles Dashboard. Displays metadata, time used, discarded observations, and algorithm metrics. Metrics (such as variance or misfit) are intelligently grouped to show changes in a `Prior -> Posterior` format (e.g., "Variance: 1.00e+0 -> 5.00e-1"). It accommodates missing posterior data (which may only be available after the subsequent forward model pass).
+    * **Analysis Tabs:** Specific visualization tabs (e.g., Responses, Observations) based on pluggable architecture.
+    * **Step Details Page:** Clicking "Details" on a forward model step navigates to a new page (`/experiments/[id]/executions/[exec_id]/ensembles/[iter]/realizations/[real_id]/steps/[step_name]`) to show specific status and logs.
 
 ## 7. Pluggable Plotting Architecture
 To ensure high-performance interactivity while handling massive ensemble datasets, the GUI must utilize a library-agnostic plotting strategy:
@@ -87,7 +95,7 @@ To ensure high-performance interactivity while handling massive ensemble dataset
 * **Real-Time Data Injection:** Plotters must support partial updates (appending points) to enable live-viewing while forward models are actively running.
 
 ## 8. Communication & Resilience
-* **Log Streaming:** The frontend must consume the `/logs/stream` endpoint using the **ReadableStream API (fetch Reader)**. It should update a virtualized terminal component line-by-line without waiting for the full response to close.
+* **Log Streaming & Filtering:** The frontend consumes the `/logs/stream` endpoint using the **ReadableStream API (fetch Reader)** to update a virtualized terminal line-by-line. It includes built-in reactive filters (INFO, DEBUG, WARN, ERROR) and a real-time text search input to parse the stream client-side without incurring backend search costs.
 * **WebSocket Resilience:** The singleton WebSocket connection must implement an automatic **reconnection strategy** with exponential backoff. The UI should display a non-blocking "Disconnected/Reconnecting" toast/indicator when the stream is interrupted.
 * **Environment Configuration:** **Zero Hardcoded URLs.** All API and WebSocket base URLs must be resolved via a centralized `config.ts` or SvelteKit environment variables.
 
