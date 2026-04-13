@@ -2,18 +2,11 @@
 import socket
 import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from gert.discovery import wait_for_gert_server
-
-
-@pytest.fixture
-def simple_example_dir(copy_example: Callable[[str], Path]) -> Path:
-    """Fixture to copy the simple example into a temporary directory."""
-    return copy_example("simple")
 
 
 def get_free_port() -> int:

@@ -16,3 +16,9 @@ def copy_example(tmp_path: Path) -> Callable[[str], Path]:
         return dest
 
     return copy_example_fn
+
+
+@pytest.fixture
+def simple_example_dir(copy_example: Callable[[str], Path]) -> Path:
+    """Fixture to copy the simple example into a temporary directory."""
+    return copy_example("simple")
