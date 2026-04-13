@@ -80,10 +80,7 @@ async def test_end_to_end_local_run(
     # 3. Wait for jobs to finish (local psij is usually fast)
     # We'll check for the workdir creation with a polling loop
     workdir_base = (
-        Path("./workdirs").resolve()
-        / config_data["name"]
-        / execution_id
-        / f"iter-{iteration}"
+        tmp_path / "workdirs" / config_data["name"] / execution_id / f"iter-{iteration}"
     )
 
     # Poll for workdir_base to be created
@@ -114,7 +111,8 @@ async def test_end_to_end_local_run(
             )
 
     ensemble_path = (
-        Path("./permanent_storage")
+        tmp_path
+        / "permanent_storage"
         / config_data["name"]
         / execution_id
         / f"iter-{iteration}"

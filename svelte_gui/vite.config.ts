@@ -1,0 +1,55 @@
+import { sveltekit } from "@sveltejs/kit/vite";
+import tailwindcss from "@tailwindcss/vite";
+import { playwright } from "@vitest/browser-playwright";
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+	plugins: [tailwindcss(), sveltekit()],
+	build: {
+		sourcemap: true,
+	},
+	server: {
+		proxy: {
+			"/experiments": {
+				target: "http://127.0.0.1:8000",
+				ws: true,
+				bypass: (req, res, options) => {
+					// Don't proxy HTML requests (page navigations), let SvelteKit handle them
+					if (req.headers.accept && req.headers.accept.includes("text/html")) {
+						return req.url;
+					}
+				}
+			},
+			"/logs": "http://127.0.0.1:8000",
+			"/system": "http://127.0.0.1:8000",
+		},
+	},
+	test: {
+		expect: { requireAssertions: true },
+		projects: [
+			{
+				extends: "./vite.config.ts",
+				test: {
+					name: "client",
+					browser: {
+						enabled: true,
+						provider: playwright(),
+						instances: [{ browser: "chromium", headless: true }],
+					},
+					include: ["src/**/*.svelte.{test,spec}.{js,ts}"],
+					exclude: ["src/lib/server/**"],
+				},
+			},
+
+			{
+				extends: "./vite.config.ts",
+				test: {
+					name: "server",
+					environment: "node",
+					include: ["src/**/*.{test,spec}.{js,ts}"],
+					exclude: ["src/**/*.svelte.{test,spec}.{js,ts}"],
+				},
+			},
+		],
+	},
+});
