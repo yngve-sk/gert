@@ -3,6 +3,7 @@ export interface RealizationStatus {
 	iteration: number;
 	realization_id: number;
 	status: string;
+	steps?: any[];
 	start_time?: string | null;
 	end_time?: string | null;
 }
@@ -19,6 +20,7 @@ export class ExecutionWebSocketStore {
 	statusEvents = $state<RealizationStatus[]>([]);
 	isConnected = $state(false);
 	error = $state<string | null>(null);
+	eventsReceived = $state(0);
 
 	constructor(
 		experimentId: string,
@@ -53,13 +55,15 @@ export class ExecutionWebSocketStore {
 				// The server sends the entire array of statuses every 1s if it changed
 				if (Array.isArray(data)) {
 					this.statusEvents = data;
+					this.eventsReceived++;
 				}
 			} catch (e) {
 				console.error("Failed to parse websocket message", e);
 			}
 		};
 
-		this.ws.onclose = () => {
+		this.ws.onclose = (event) => {
+			console.log(`WebSocket closed (code: ${event.code}, reason: ${event.reason})`);
 			this.isConnected = false;
 			this.ws = null;
 

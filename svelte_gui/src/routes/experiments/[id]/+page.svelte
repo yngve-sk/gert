@@ -37,7 +37,7 @@ function getStatusColor(status: string): string {
 }
 </script>
 
-<div class="flex flex-col gap-4 max-w-6xl w-full">
+<div class="flex flex-col gap-4 w-full">
 	<header class="flex items-center justify-between gap-4">
 		<div class="flex items-center gap-4">
 			<a href="/experiments" class="btn bg-surface-800 hover:bg-surface-700 text-surface-300 px-3 py-1.5 rounded border border-surface-700 text-sm transition-colors">

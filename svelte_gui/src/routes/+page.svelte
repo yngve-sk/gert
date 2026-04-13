@@ -1,5 +1,5 @@
 <!-- Dummy nesting to verify M2 optical nesting -->
-<div class="flex flex-col gap-4 max-w-4xl">
+<div class="flex flex-col gap-4">
 
 	<!-- L2: Container -->
 	<section class="bg-surface-800 border border-surface-700 rounded-lg overflow-hidden shadow-lg">

@@ -169,7 +169,7 @@ class JobSubmitter:
             job_name = str(self._queue_config["job_name"])
 
         # Create and return the JobSpec
-        return psij.JobSpec(
+        job_spec = psij.JobSpec(
             executable="/bin/bash",
             arguments=["-c", command],
             resources=resources,
@@ -177,6 +177,9 @@ class JobSubmitter:
             name=job_name,
             directory=directory,
         )
+
+        logger.info(f"Submitting JobSpec with command:\n{command}")
+        return job_spec
 
     def _parse_memory_string(self, memory_str: str) -> int:
         """Parse memory strings like '4GB', '512MB' into bytes.

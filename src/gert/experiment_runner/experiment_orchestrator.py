@@ -129,7 +129,9 @@ class ExperimentOrchestrator:
         self._workdir_manager = RealizationWorkdirManager(
             base_workdir=config.realization_workdirs_base,
         )
-        self._storage_api = StorageAPI(base_storage_path=config.storage_base)
+        self._storage_api = StorageAPI(
+            base_storage_path=Path(config.base_working_directory) / config.storage_base,
+        )
 
         self._plugins = GertRuntimePlugins()
 
@@ -407,7 +409,8 @@ class ExperimentOrchestrator:
             # 0. Start the consolidation background worker for this iteration
             if self._storage_api:
                 ensemble_path = (
-                    self._config.storage_base
+                    Path(self._config.base_working_directory)
+                    / self._config.storage_base
                     / self._config.name
                     / self._execution_id
                     / f"iter-{i}"
@@ -950,7 +953,8 @@ class ExperimentOrchestrator:
             logger.exception(f"Responses not found for iteration {iteration}!")
             # Check if there is anything in the ingestion_queue.jsonl
             ensemble_path = (
-                self._config.storage_base
+                Path(self._config.base_working_directory)
+                / self._config.storage_base
                 / self._config.name
                 / self._execution_id
                 / f"iter-{iteration}"

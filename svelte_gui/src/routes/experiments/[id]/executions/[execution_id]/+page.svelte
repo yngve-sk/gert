@@ -2,7 +2,11 @@
 import { onDestroy, onMount } from "svelte";
 import { page } from "$app/state";
 import { pauseExecution, resumeExecution } from "$lib/api/client";
-import IterationDashboard from "$lib/components/dashboard/IterationDashboard.svelte";
+import EnsemblesSidebar from "$lib/components/dashboard/EnsemblesSidebar.svelte";
+import ExperimentSummaryTab from "$lib/components/dashboard/ExperimentSummaryTab.svelte";
+import RealizationStatusTab from "$lib/components/dashboard/RealizationStatusTab.svelte";
+import AnalysisDashboard from "$lib/components/dashboard/AnalysisDashboard.svelte";
+import UpdateInfoTab from "$lib/components/dashboard/UpdateInfoTab.svelte";
 import SpatialContainer from "$lib/components/plotting/SpatialContainer.svelte";
 import VirtualizedTerminal from "$lib/components/VirtualizedTerminal.svelte";
 import { ExecutionWebSocketStore } from "$lib/stores/websocket.svelte";
@@ -15,7 +19,59 @@ let wsStore: ExecutionWebSocketStore | null = $state(null);
 let isActionPending = $state(false);
 let actionError = $state<string | null>(null);
 
-let activeTab = $state<"console" | "responses" | "observations" | "parameters" | "spatial">("console");
+let activeTab = $state<"console" | "realizations" | "updates" | "responses" | "observations" | "parameters">("updates");
+
+let selectedIteration = $state<number | null>(null);
+let selectedRealization = $state<number | null>(null);
+let selectedUpdate = $state<number | null>(null);
+
+function handleSelectOverview() {
+	selectedIteration = null;
+	selectedRealization = null;
+	selectedUpdate = null;
+	if (activeTab !== "updates") {
+		activeTab = "updates";
+	}
+}
+
+function handleSelectIteration(iter: number | null) {
+	selectedIteration = iter;
+	if (iter !== null) {
+		selectedUpdate = null;
+	}
+}
+
+function handleSelectRealization(realizationId: number | null) {
+	selectedRealization = realizationId;
+	if (realizationId !== null) {
+		if (activeTab !== "realizations") {
+			activeTab = "realizations";
+		}
+	}
+}
+
+function handleSelectUpdate(iter: number | null) {
+	selectedUpdate = iter;
+	if (iter !== null) {
+		selectedIteration = null;
+		selectedRealization = null;
+		if (activeTab !== "updates") {
+			activeTab = "updates";
+		}
+	}
+}
+
+let currentStatus = $derived.by(() => {
+	// Look for overarching status (-1, -1) in WS events, fallback to static page data
+	const overarching = wsStore?.statusEvents.find(e => e.realization_id === -1 && e.iteration === -1);
+	return overarching ? overarching.status : (data.execution?.status || "PENDING");
+});
+
+let isFinished = $derived(
+	currentStatus === "COMPLETED" ||
+	currentStatus === "FAILED" ||
+	currentStatus === "CANCELED"
+);
 
 onMount(() => {
 	const experimentId = data.experimentId;
@@ -34,12 +90,12 @@ onDestroy(() => {
 	}
 });
 
-async function handlePause() {
-	if (!page.params.id || !page.params.execution_id) return;
+async function handlePause(force = false) {
+	if (!data.experimentId || !data.executionId) return;
 	isActionPending = true;
 	actionError = null;
 	try {
-		await pauseExecution(page.params.id, page.params.execution_id);
+		await pauseExecution(data.experimentId, data.executionId, window.fetch, force);
 	} catch (e) {
 		actionError = e instanceof Error ? e.message : "Failed to pause";
 	} finally {
@@ -48,11 +104,11 @@ async function handlePause() {
 }
 
 async function handleResume() {
-	if (!page.params.id || !page.params.execution_id) return;
+	if (!data.experimentId || !data.executionId) return;
 	isActionPending = true;
 	actionError = null;
 	try {
-		await resumeExecution(page.params.id, page.params.execution_id);
+		await resumeExecution(data.experimentId, data.executionId, window.fetch);
 	} catch (e) {
 		actionError = e instanceof Error ? e.message : "Failed to resume";
 	} finally {
@@ -61,44 +117,59 @@ async function handleResume() {
 }
 
 let totalIterations = $derived(data.config?.updates ? data.config.updates.length + 1 : 1);
+let numSteps = $derived(data.config?.forward_model_steps ? data.config.forward_model_steps.length : 1);
 </script>
 
-<div class="flex flex-col gap-4 max-w-7xl h-full w-full">
+<div class="flex flex-col gap-4 h-full w-full">
 	<header class="flex items-center justify-between border-b border-surface-800 bg-surface-900 px-4 py-3 rounded-t-lg shadow-sm">
 		<div class="flex items-center gap-4">
-			<a href="/experiments/{page.params.id}" class="btn bg-surface-800 hover:bg-surface-700 text-surface-300 px-3 py-1.5 rounded border border-surface-700 text-sm transition-colors">
+			<a href="/experiments/{data.experimentId}" class="btn bg-surface-800 hover:bg-surface-700 text-surface-300 px-3 py-1.5 rounded border border-surface-700 text-sm transition-colors">
 				&larr; Back
 			</a>
 			<div>
 				<h1 class="text-xl font-bold tracking-tight text-surface-50">Execution Inspector</h1>
-				<p class="text-xs font-mono text-surface-400 mt-1">{page.params.execution_id}</p>
+				<p class="text-xs font-mono text-surface-400 mt-1">{data.executionId}</p>
 			</div>
 		</div>
 
 		<div class="flex items-center gap-4">
-			<div class="flex items-center gap-2 bg-surface-950 p-1 rounded border border-surface-800">
-				<button
-					class="btn bg-tertiary-500 hover:bg-tertiary-400 text-white px-3 py-1 text-xs font-bold rounded transition-colors disabled:opacity-50"
-					onclick={handlePause}
-					disabled={isActionPending}
-				>
-					Pause
-				</button>
-				<button
-					class="btn bg-primary-500 hover:bg-primary-400 text-white px-3 py-1 text-xs font-bold rounded transition-colors disabled:opacity-50"
-					onclick={handleResume}
-					disabled={isActionPending}
-				>
-					Resume
-				</button>
-			</div>
+			{#if !isFinished}
+				<div class="flex items-center gap-2 bg-surface-950 p-1 rounded border border-surface-800">
+					{#if currentStatus === "PAUSED" || currentStatus === "PAUSING"}
+						<button
+							class="btn bg-primary-500 hover:bg-primary-400 text-white px-3 py-1 text-xs font-bold rounded transition-colors disabled:opacity-50"
+							onclick={handleResume}
+							disabled={isActionPending}
+						>
+							Resume
+						</button>
+					{:else}
+						<button
+							class="btn bg-tertiary-500 hover:bg-tertiary-400 text-white px-3 py-1 text-xs font-bold rounded transition-colors disabled:opacity-50"
+							onclick={() => handlePause(false)}
+							disabled={isActionPending}
+						>
+							Pause
+						</button>
+					{/if}
+
+					<button
+						class="btn bg-error-500 hover:bg-error-400 text-white px-3 py-1 text-xs font-bold rounded transition-colors disabled:opacity-50"
+						onclick={() => handlePause(true)}
+						disabled={isActionPending}
+					>
+						Stop
+					</button>
+				</div>
+			{/if}
 
 			{#if wsStore}
-				<div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-800 border {wsStore.isConnected ? 'border-success-500/50' : 'border-error-500/50'}">
+				<div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-800 border {wsStore.isConnected ? 'border-success-500/50' : 'border-error-500/50'}" title="{wsStore.eventsReceived} events received">
 					<div class="w-2 h-2 rounded-full {wsStore.isConnected ? 'bg-success-500 animate-pulse' : 'bg-error-500'}"></div>
 					<span class="text-xs font-bold {wsStore.isConnected ? 'text-success-500' : 'text-error-500'}">
 						{wsStore.isConnected ? 'LIVE' : 'DISCONNECTED'}
 					</span>
+					<span class="text-[10px] text-surface-400 font-mono ml-1 px-1.5 py-0.5 bg-surface-900 rounded">{wsStore.eventsReceived}</span>
 				</div>
 			{/if}
 		</div>
@@ -116,80 +187,162 @@ let totalIterations = $derived(data.config?.updates ? data.config.updates.length
 	{/if}
 
 	<div class="grid grid-cols-1 lg:grid-cols-[350px_1fr] gap-4 h-[calc(100vh-140px)] w-full">
-		<!-- Left Sidebar: Iteration Dashboard -->
+		<!-- Left Sidebar: Ensembles Dashboard -->
 		<section class="bg-surface-800 border border-surface-700 rounded-lg p-4 shadow-lg flex flex-col h-full overflow-hidden">
-			<IterationDashboard events={wsStore?.statusEvents || []} totalIterations={totalIterations} />
-		</section>
+			<EnsemblesSidebar
+				experimentId={data.experimentId}
+				executionId={data.executionId}
+				events={wsStore?.statusEvents || []}
+				totalIterations={totalIterations}
+				numSteps={numSteps}
+				selectedIteration={selectedIteration}
+				selectedRealization={selectedRealization}
+				selectedUpdate={selectedUpdate}
+				onSelectIteration={handleSelectIteration}
+				onSelectRealization={handleSelectRealization}
+				onSelectUpdate={handleSelectUpdate}
+				onSelectOverview={handleSelectOverview}
+				/>
+				</section>
 
-		<!-- Right Content: Multi-tab workspace -->
-		<section class="bg-surface-800 border border-surface-700 rounded-lg shadow-lg flex flex-col h-full overflow-hidden min-w-0">
-			<header class="flex border-b border-surface-700 bg-surface-900 overflow-x-auto">
+				<!-- Right Content: Multi-tab workspace -->
+				<section class="bg-surface-800 border border-surface-700 rounded-lg shadow-lg flex flex-col h-full overflow-hidden min-w-0">
+				<header class="flex-none flex border-b border-surface-700 bg-surface-900 overflow-x-auto">
 				<button
-					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'console' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
-					onclick={() => activeTab = 'console'}
+					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'updates' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
+					onclick={() => activeTab = 'updates'}
 				>
-					Console
+					Updates
 				</button>
 				<button
-					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'responses' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
-					onclick={() => activeTab = 'responses'}
+					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'realizations' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
+					onclick={() => activeTab = 'realizations'}
 				>
-					Responses Dashboard
-				</button>
-				<button
-					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'observations' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
-					onclick={() => activeTab = 'observations'}
-				>
-					Observations Dashboard
+					Realizations
 				</button>
 				<button
 					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'parameters' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
 					onclick={() => activeTab = 'parameters'}
 				>
-					Parameters Dashboard
+					Parameters
 				</button>
 				<button
-					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'spatial' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
-					onclick={() => activeTab = 'spatial'}
+					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'responses' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
+					onclick={() => activeTab = 'responses'}
+				>					Responses
+				</button>
+				<button
+					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'observations' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
+					onclick={() => activeTab = 'observations'}
 				>
-					Spatial Field
+					Observations
+				</button>
+				<button
+					class="px-4 py-2 text-sm font-bold border-b-2 whitespace-nowrap transition-colors {activeTab === 'console' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-200 hover:bg-surface-800'}"
+					onclick={() => activeTab = 'console'}
+				>					Logs
 				</button>
 			</header>
-
-			<div class="flex-auto overflow-hidden relative p-4">
+			<div class="flex-auto overflow-hidden min-h-0 relative p-4">
 				{#if activeTab === 'console'}
 					<VirtualizedTerminal
 						experimentId={data.experimentId}
 						executionId={data.executionId}
-						isRunning={data.execution?.status === 'RUNNING' || data.execution?.status === 'PAUSED'}
+						isRunning={!isFinished}
 					/>
-				{:else if activeTab === 'spatial'}
-					<SpatialContainer />
-				{:else if activeTab === 'responses' || activeTab === 'observations' || activeTab === 'parameters'}
-					<div class="grid grid-cols-1 md:grid-cols-[250px_1fr] gap-4 h-full">
-						<!-- List of items to select -->
-						<div class="bg-surface-900 border border-surface-700 rounded-lg overflow-y-auto flex flex-col">
-							<header class="p-2 border-b border-surface-700 bg-surface-800 sticky top-0">
-								<h3 class="text-xs font-bold text-surface-300 uppercase tracking-wider">{activeTab} List</h3>
-							</header>
-							<div class="p-2 flex flex-col gap-1">
-								{#each [1, 2, 3, 4, 5] as i}
-									<button class="text-left px-3 py-2 text-sm text-surface-200 hover:bg-surface-700 rounded transition-colors focus:bg-surface-700 border border-transparent focus:border-surface-600 focus:outline-none">
-										Sample {activeTab.slice(0, -1)} {i}
-									</button>
-								{/each}
-							</div>
-						</div>
+				{:else if activeTab === 'updates'}
+					<div class="flex flex-col h-full overflow-y-auto gap-4">
+						<ExperimentSummaryTab
+							experimentId={data.experimentId}
+							executionId={data.executionId}
+							totalIterations={totalIterations}
+							events={wsStore?.statusEvents || []}
+						/>
 
-						<!-- Plot Area -->
-						<div class="h-full w-full flex items-center justify-center border border-dashed border-surface-700 rounded-lg bg-surface-900/50">
-							<div class="text-center">
-								<svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto text-surface-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
-								</svg>
-								<p class="text-surface-300 font-bold mb-1">Plot Area</p>
-								<p class="text-surface-500 text-sm">Select an item from the list to display its data.</p>
-							</div>
+						<div class="flex flex-row flex-wrap gap-4 items-start w-full">
+							{#if selectedUpdate !== null}
+								<div class="flex-none w-full md:w-[600px] max-w-full">
+									<div class="bg-surface-900 border border-surface-700 rounded-lg shadow-lg overflow-hidden">
+										<UpdateInfoTab
+											experimentId={data.experimentId}
+											executionId={data.executionId}
+											iteration={selectedUpdate}
+										/>
+									</div>
+								</div>
+							{:else}
+								{#each Array.from({length: totalIterations - 1}, (_, i) => i) as iter}
+									<div class="flex-none w-full md:w-[450px] max-w-full">
+										<div class="bg-surface-900 border border-surface-700 rounded-lg shadow-lg overflow-hidden h-full">
+											<UpdateInfoTab
+												experimentId={data.experimentId}
+												executionId={data.executionId}
+												iteration={iter}
+											/>
+										</div>
+									</div>
+								{/each}
+							{/if}
+						</div>
+					</div>
+				{:else if activeTab === 'realizations'}
+					<RealizationStatusTab
+						events={wsStore?.statusEvents || []}
+						selectedIteration={selectedIteration}
+						selectedRealization={selectedRealization}
+						numSteps={numSteps}
+						onSelectRealization={handleSelectRealization}
+					/>
+				{:else if activeTab === 'responses'}
+					<AnalysisDashboard
+						experimentId={data.experimentId}
+						executionId={data.executionId}
+						totalIterations={totalIterations}
+						dataType="responses"
+						observations={data.config?.observations || []}
+					/>
+				{:else if activeTab === 'parameters'}
+					<AnalysisDashboard
+						experimentId={data.experimentId}
+						executionId={data.executionId}
+						totalIterations={totalIterations}
+						dataType="parameters"
+						observations={data.config?.observations || []}
+					/>				{:else if activeTab === 'observations'}
+					<div class="h-full flex flex-col gap-4 overflow-hidden">
+						<header class="flex-none">
+							<h3 class="text-sm font-bold text-surface-300">Observation Data</h3>
+							<p class="text-xs text-surface-500 italic">Global observations configured for this experiment.</p>
+						</header>
+						<div class="flex-auto overflow-y-auto bg-surface-900 border border-surface-700 rounded-lg p-4 font-mono text-xs">
+							{#if data.config?.observations && data.config.observations.length > 0}
+								<table class="w-full text-left">
+									<thead class="border-b border-surface-700 text-surface-400">
+										<tr>
+											<th class="py-2 px-1">Response</th>
+											<th class="py-2 px-1">Key</th>
+											<th class="py-2 px-1 text-right">Value</th>
+											<th class="py-2 px-1 text-right">Std Dev</th>
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-surface-800">
+										{#each data.config.observations as obs}
+											<tr class="hover:bg-surface-800/50">
+												<td class="py-2 px-1 text-primary-400">{obs.key.response}</td>
+												<td class="py-2 px-1 text-surface-500">
+													{Object.entries(obs.key).filter(([k]) => k !== 'response').map(([k,v]) => `${k}:${v}`).join(', ')}
+												</td>
+												<td class="py-2 px-1 text-right text-surface-200">{obs.value.toExponential(3)}</td>
+												<td class="py-2 px-1 text-right text-surface-400">{obs.std_dev.toExponential(3)}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							{:else}
+								<div class="h-full flex items-center justify-center text-surface-500 italic">
+									No observations configured.
+								</div>
+							{/if}
 						</div>
 					</div>
 				{/if}
