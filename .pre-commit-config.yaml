@@ -36,5 +36,5 @@ repos:
           - textual-plot
           - types-psutil
         # Ensure mypy checks all files, not just changed ones
-        pass_filenames: false
-        args: ["--strict", "src/gert", "tests"]
+        pass_filenames: true
+        args: ["--strict"]
