@@ -106,6 +106,24 @@ class JobSubmitter:
         # Create the executable from the execution steps
         command_parts = ["set -e"]
 
+        # Ensure gert_curl_retry function is defined if monitoring is used
+        if monitoring_url and experiment_id and execution_id:
+            command_parts.append(
+                "gert_curl_retry() {\n"
+                "  local url=$1\n"
+                "  local max_retries=5\n"
+                "  local delay=1\n"
+                "  for i in $(seq 1 $max_retries); do\n"
+                '    if curl -s -f -X POST "$url" >/dev/null; then\n'
+                "      return 0\n"
+                "    fi\n"
+                "    sleep $delay\n"
+                "    delay=$((delay * 2))\n"
+                "  done\n"
+                "  return 0\n"
+                "}",
+            )
+
         for step in execution_steps:
             name = step["name"]
             cmd = step["command"]
@@ -124,12 +142,12 @@ class JobSubmitter:
 
                 command_parts.extend(
                     [
-                        f"curl -s -X POST '{running_url}' || true",
+                        f"gert_curl_retry '{running_url}'",
                         (
                             f"{{ ({cmd}) > {name}.stdout 2> {name}.stderr ; }} || "
-                            f"{{ curl -s -X POST '{failed_url}' || true; exit 1; }}"
+                            f"{{ gert_curl_retry '{failed_url}'; exit 1; }}"
                         ),
-                        f"curl -s -X POST '{completed_url}' || true",
+                        f"gert_curl_retry '{completed_url}'",
                     ],
                 )
 
@@ -142,10 +160,10 @@ class JobSubmitter:
         resources = psij.ResourceSpecV1()
 
         # Map common resource parameters
-        if "cores" in self._queue_config:
+        if self._queue_config.get("cores"):
             resources.process_count = int(self._queue_config["cores"])
 
-        if "memory" in self._queue_config:
+        if self._queue_config.get("memory"):
             memory_str = str(self._queue_config["memory"])
             # Convert memory strings like "4GB", "512MB" to bytes
             resources.memory = self._parse_memory_string(memory_str)
@@ -153,7 +171,7 @@ class JobSubmitter:
         # Create job attributes for scheduler-specific settings
         attributes = psij.JobAttributes()
 
-        if "wall_time" in self._queue_config:
+        if self._queue_config.get("wall_time"):
             wall_time_str = str(self._queue_config["wall_time"])
             # Convert time strings like "02:00:00", "30m" to timedelta
             attributes.duration = self._parse_time_string(wall_time_str)

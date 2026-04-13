@@ -1,26 +1,25 @@
-"""Tests for the Ensemble Information Filter (EnIF) plugin."""
+"""Tests for the Ensemble Smoother (ES-MDA) plugin."""
 
 from typing import Any
 
-import networkx as nx
 import numpy as np
 import polars as pl
 import pytest
 from polars.testing import assert_series_equal
 
 from gert.experiments.models import ParameterMetadata
-from gert.plugins.enif_update import EnIFUpdate
+from gert.plugins.es_update import ESUpdate
 from gert.updates.spatial import SpatialToolkit
 
 
 @pytest.fixture
-def enif() -> EnIFUpdate:
-    """Provide a fresh instance of the EnIFUpdate plugin."""
-    return EnIFUpdate()
+def es() -> ESUpdate:
+    """Provide a fresh instance of the ESUpdate plugin."""
+    return ESUpdate()
 
 
 def _run_isolated_update(
-    algorithm: EnIFUpdate,
+    algorithm: ESUpdate,
     prior: pl.DataFrame,
     responses: pl.DataFrame,
     observations: pl.DataFrame,
@@ -48,12 +47,12 @@ def _run_isolated_update(
     )
 
 
-class TestEnIFContractAndMicroCase:
+class TestESContractAndMicroCase:
     """Testing the micro case (1 param, 1 obs, 2 reals) and contract compliance."""
 
     def test_schema_preservation_and_non_updatable_ignored(
         self,
-        enif: EnIFUpdate,
+        es: ESUpdate,
     ) -> None:
         """The output DataFrame must exactly match the input schema and keep
         non-updatable params fixed.
@@ -88,7 +87,7 @@ class TestEnIFContractAndMicroCase:
         )
 
         posterior = _run_isolated_update(
-            enif,
+            es,
             prior,
             responses,
             observations,
@@ -108,7 +107,7 @@ class TestEnIFContractAndMicroCase:
         assert not posterior["PARAM1"].equals(prior["PARAM1"])
 
 
-class TestEnIFMathematicalSanityChecks:
+class TestESMathematicalSanityChecks:
     """Fundamental DA sanity checks using larger ensembles
     (1 param, 1 obs, 100 reals).
     """
@@ -155,7 +154,7 @@ class TestEnIFMathematicalSanityChecks:
 
     def test_variance_reduction_and_mean_shift(
         self,
-        enif: EnIFUpdate,
+        es: ESUpdate,
         large_ensemble_setup: dict[str, pl.DataFrame],
     ) -> None:
         """Assimilating a precise observation must reduce variance
@@ -164,7 +163,7 @@ class TestEnIFMathematicalSanityChecks:
         prior = large_ensemble_setup["prior"]
 
         posterior = _run_isolated_update(
-            enif,
+            es,
             prior,
             large_ensemble_setup["responses"],
             large_ensemble_setup["observations"],
@@ -193,7 +192,7 @@ class TestEnIFMathematicalSanityChecks:
 
     def test_zero_information_update(
         self,
-        enif: EnIFUpdate,
+        es: ESUpdate,
         large_ensemble_setup: dict[str, pl.DataFrame],
     ) -> None:
         """Massive observation errors should result in a posterior
@@ -203,11 +202,11 @@ class TestEnIFMathematicalSanityChecks:
 
         # Modify observation to have massive error
         obs = large_ensemble_setup["observations"].with_columns(
-            pl.lit(1e6).alias("std_dev"),
+            pl.lit(1e12).alias("std_dev"),
         )
 
         posterior = _run_isolated_update(
-            enif,
+            es,
             prior,
             large_ensemble_setup["responses"],
             obs,
@@ -223,14 +222,11 @@ class TestEnIFMathematicalSanityChecks:
         )
 
 
-class TestEnIFSizingAndDesign:
+class TestESSizingAndDesign:
     """Testing standard (cross-covariance) and over-determined cases."""
 
-    def test_standard_case_independence(self, enif: EnIFUpdate) -> None:
-        """Distinct parameters are treated as independent by EnIF
-        (block-diagonal precision), so an unobserved parameter should NOT update
-        even if empirically correlated.
-        """
+    def test_standard_case_correlation(self, es: ESUpdate) -> None:
+        """Standard ES DOES update correlated unobserved parameters."""
         np.random.seed(42)
         n_reals = 100
 
@@ -269,7 +265,7 @@ class TestEnIFSizingAndDesign:
         )
 
         posterior = _run_isolated_update(
-            enif,
+            es,
             prior,
             responses,
             observations,
@@ -283,93 +279,77 @@ class TestEnIFSizingAndDesign:
             "Observed parameter A did not update properly."
         )
 
-        # B should NOT shift significantly because EnIF forces independence between keys
+        # B should ALSO shift significantly because ES respects empirical correlation
         prior_mean_b = float(prior["PARAM_B"].mean() or 0.0)  # type: ignore[arg-type]
         post_mean_b = float(posterior["PARAM_B"].mean() or 0.0)  # type: ignore[arg-type]
-        assert abs(post_mean_b - prior_mean_b) < 0.1, (
-            "Unobserved parameter B incorrectly updated."
+        assert post_mean_b > prior_mean_b + 2.0, (
+            "Unobserved parameter B did not update via correlation."
         )
 
-    def test_spatial_field_connected_graph(self, enif: EnIFUpdate) -> None:
-        """Testing a 1D spatial field using a networkx connected graph."""
-
+    def test_alpha_inflation(self, es: ESUpdate) -> None:
+        """Higher alpha should lead to a smaller update (larger perceived noise)."""
         np.random.seed(42)
-        n_reals = 50
-        n_nodes = 5
+        n_reals = 100
 
-        # 1D Grid: 0 - 1 - 2 - 3 - 4
-        # We define a strong spatial prior correlation
-        graph = nx.path_graph(n_nodes)
+        prior_vals = np.random.normal(loc=5.0, scale=1.0, size=n_reals)
+        prior = pl.DataFrame({"realization": np.arange(n_reals), "P1": prior_vals})
 
-        # Build prior values (start all around 10.0)
-        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
-        param_matrix = np.random.normal(loc=10.0, scale=1.0, size=(n_reals, n_nodes))
-        prior_data["PORO"] = [list(row) for row in param_matrix]
-        prior = pl.DataFrame(prior_data)
-
-        # Responses: We only observe Node 2 (the middle)
         responses = pl.DataFrame(
             {
                 "realization": np.arange(n_reals),
-                "type": ["log"] * n_reals,
-                "well_id": ["EXPLORATION_1"] * n_reals,
-                "depth": [2050.0] * n_reals,
-                "value": param_matrix[:, 2] * 1.5,
+                "response": ["R1"] * n_reals,
+                "time": [1.0] * n_reals,
+                "value": prior_vals,
             },
         )
 
         observations = pl.DataFrame(
             {
-                "type": ["log"],
-                "well_id": ["EXPLORATION_1"],
-                "depth": [2050.0],
-                "value": [30.0],  # True PORO_2 is ~20
+                "response": ["R1"],
+                "time": [1.0],
+                "value": [10.0],
                 "std_dev": [0.1],
             },
         )
 
-        args = {
-            "random_seed": 42,
-            "parameter_graphs": {"PORO": graph},
-            "neighbor_propagation_order": 1,
-        }
-
-        posterior = _run_isolated_update(
-            enif,
+        # Update with alpha=1.0
+        post_1 = _run_isolated_update(
+            es,
             prior,
             responses,
             observations,
-            updatable_keys=["PORO"],
-            args=args,
+            ["P1"],
+            {"alpha": 1.0},
+        )
+        # Update with alpha=10.0
+        post_10 = _run_isolated_update(
+            es,
+            prior,
+            responses,
+            observations,
+            ["P1"],
+            {"alpha": 10.0},
         )
 
-        prior_matrix = np.vstack(prior["PORO"].to_list())
-        prior_means = prior_matrix.mean(axis=0)
-        post_matrix = np.vstack(posterior["PORO"].to_list())
-        post_means = post_matrix.mean(axis=0)
+        shift_1 = abs(float(str(post_1["P1"].mean())) - float(str(prior["P1"].mean())))
+        shift_10 = abs(
+            float(str(post_10["P1"].mean())) - float(str(prior["P1"].mean())),
+        )
 
-        # Node 2 must update heavily
-        assert post_means[2] > prior_means[2] + 2.0
+        assert shift_10 < shift_1, "Alpha inflation did not reduce the update shift."
 
-        # Nodes 1 and 3 should update somewhat due to the imposed
-        # correlation from the graph
-        assert abs(post_means[1] - prior_means[1]) > 0.1
-        assert abs(post_means[3] - prior_means[3]) > 0.1
-
-    def test_over_determined_case(self, enif: EnIFUpdate) -> None:
+    def test_over_determined_case(self, es: ESUpdate) -> None:
         """Algorithm must not crash when N_obs > N_realizations (subspace inversion)."""
         np.random.seed(42)
         n_reals = 10
         n_obs = 50
         n_params = 5
 
-        # Small realization count, massive observation count
         prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
         for p in range(n_params):
             prior_data[f"P{p}"] = np.random.normal(size=n_reals)
         prior = pl.DataFrame(prior_data)
 
-        # 50 simulated responses per realization
         realizations_col = []
         well_col = []
         time_col = []
@@ -377,8 +357,8 @@ class TestEnIFSizingAndDesign:
         for r in range(n_reals):
             for o in range(n_obs):
                 realizations_col.append(r)
-                well_col.append(f"W_{o % 5}")
-                time_col.append(float(o // 5))
+                well_col.append(f"W_{o}")
+                time_col.append(0.0)
                 vals_col.append(np.random.normal())
 
         responses = pl.DataFrame(
@@ -392,70 +372,105 @@ class TestEnIFSizingAndDesign:
 
         observations = pl.DataFrame(
             {
-                "well_id": [f"W_{o % 5}" for o in range(n_obs)],
-                "time": [float(o // 5) for o in range(n_obs)],
+                "well_id": [f"W_{o}" for o in range(n_obs)],
+                "time": [0.0] * n_obs,
                 "value": np.random.normal(size=n_obs),
                 "std_dev": np.ones(n_obs) * 0.1,
             },
         )
 
-        # Should complete successfully without singular matrix / broadcasting errors
         posterior = _run_isolated_update(
-            enif,
+            es,
             prior,
             responses,
             observations,
-            updatable_keys=[f"P{p}" for p in range(n_params)],
+            [f"P{p}" for p in range(n_params)],
         )
 
         assert posterior.shape == prior.shape
 
-    def test_ensemble_collapse(self, enif: EnIFUpdate) -> None:
-        """Ensemble collapse (0 variance) should be handled gracefully
-        without catastrophic crashes.
-        """
-        prior = pl.DataFrame(
-            {
-                "realization": [0, 1, 2, 3],
-                "PARAM1": [5.0, 5.0, 5.0, 5.0],  # Variance = 0
-            },
-        )
+
+class TestESSnapshots:
+    """Snapshot tests for ESUpdate algorithm to detect silent
+    mathematical regressions.
+    """
+
+    def _assert_snapshot(
+        self,
+        posterior: pl.DataFrame,
+        snapshot: Any,
+        name: str,
+    ) -> None:
+        """Helper to round floats and assert against a snapshot."""
+        rounded = posterior.select(
+            pl.exclude(pl.Float64, pl.Float32),
+            pl.col(pl.Float64, pl.Float32).round(5),
+        ).sort("realization")
+        snapshot.assert_match(rounded.write_csv(), name)
+
+    def test_es_small_snapshot(self, es: ESUpdate, snapshot: Any) -> None:
+        """The Small/Dummy Snapshot."""
+        np.random.seed(42)
+        n_reals = 10
+        n_params = 3
+        n_obs = 2
+
+        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
+        for p in range(n_params):
+            prior_data[f"PARAM_{p}"] = np.random.normal(
+                loc=10.0,
+                scale=2.0,
+                size=n_reals,
+            )
+        prior = pl.DataFrame(prior_data)
+
+        realizations_col = []
+        resp_col = []
+        time_col = []
+        vals_col = []
+        for r in range(n_reals):
+            for o in range(n_obs):
+                realizations_col.append(r)
+                resp_col.append("FOPR")
+                time_col.append(10.0 if o == 0 else 20.0)
+                vals_col.append(
+                    prior_data["PARAM_0"][r] * 1.5 + np.random.normal(scale=0.1),
+                )
 
         responses = pl.DataFrame(
             {
-                "realization": [0, 1, 2, 3],
-                "well_id": ["W1"] * 4,
-                "time": [5.0] * 4,
-                "value": [10.0, 10.0, 10.0, 10.0],
+                "realization": realizations_col,
+                "response": resp_col,
+                "time": time_col,
+                "value": vals_col,
             },
         )
 
         observations = pl.DataFrame(
             {
-                "well_id": ["W1"],
-                "time": [5.0],
-                "value": [20.0],
-                "std_dev": [1.0],
+                "response": ["FOPR"] * n_obs,
+                "time": [10.0, 20.0],
+                "value": [15.0] * n_obs,
+                "std_dev": [0.5] * n_obs,
             },
         )
 
-        # If it crashes, it fails the test. If it raises a clear error
-        # or returns clean, it passes.
-        try:
-            posterior = _run_isolated_update(
-                enif,
-                prior,
-                responses,
-                observations,
-                ["PARAM1"],
-            )
-            assert posterior is not None
-        except RecursionError:
-            pytest.fail("Ensemble collapse caused a RecursionError")
-        except Exception:  # noqa: BLE001, S110
-            pass
+        posterior = _run_isolated_update(
+            es,
+            prior,
+            responses,
+            observations,
+            [f"PARAM_{p}" for p in range(n_params)],
+            {"random_seed": 42},
+        )
 
-    def test_missing_responses_handled_correctly(self, enif: EnIFUpdate) -> None:
+        self._assert_snapshot(posterior, snapshot, "small_posterior_es.csv")
+
+
+class TestESEdgeCases:
+    """Testing DA edge cases like missing observations or failed realizations."""
+
+    def test_missing_responses_handled_correctly(self, es: ESUpdate) -> None:
         """Realizations missing responses entirely should be excluded from the update
         but kept in the posterior (with prior values).
         """
@@ -486,7 +501,7 @@ class TestEnIFSizingAndDesign:
         )
 
         posterior = _run_isolated_update(
-            enif,
+            es,
             prior,
             responses,
             observations,
@@ -503,190 +518,3 @@ class TestEnIFSizingAndDesign:
         # Valid realizations (0 and 2) should be updated
         assert posterior.filter(pl.col("realization") == 0)["PARAM1"].item() != 1.0
         assert posterior.filter(pl.col("realization") == 2)["PARAM1"].item() != 3.0
-
-
-class TestEnIFSnapshots:
-    """Snapshot tests for EnIFUpdate algorithm to detect silent
-    mathematical regressions.
-    """
-
-    def _assert_snapshot(
-        self,
-        posterior: pl.DataFrame,
-        snapshot: Any,
-        name: str,
-    ) -> None:
-        """Helper to round floats and assert against a snapshot."""
-        rounded = posterior.select(
-            pl.exclude(pl.Float64, pl.Float32),
-            pl.col(pl.Float64, pl.Float32).round(5),
-        ).sort("realization")
-        snapshot.assert_match(rounded.write_csv(), name)
-
-    def test_enif_small_snapshot(self, enif: EnIFUpdate, snapshot: Any) -> None:
-        """The Small/Dummy Snapshot. 3 params, 2 obs, 10 realizations.
-        Easy to trace linearly if it breaks.
-        """
-        np.random.seed(42)
-        n_reals = 10
-        n_params = 3
-        n_obs = 2
-
-        # 1. Create fixed inputs deterministically
-        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
-        for p in range(n_params):
-            prior_data[f"PARAM_{p}"] = np.random.normal(
-                loc=10.0,
-                scale=2.0,
-                size=n_reals,
-            )
-        prior = pl.DataFrame(prior_data)
-
-        realizations_col = []
-        resp_col = []
-        time_col = []
-        vals_col = []
-        for r in range(n_reals):
-            for o in range(n_obs):
-                realizations_col.append(r)
-                resp_col.append("FOPR")
-                time_col.append(10.0 if o == 0 else 20.0)
-                # Deterministic response mapping
-                vals_col.append(
-                    prior_data["PARAM_0"][r] * 1.5 + np.random.normal(scale=0.1),
-                )
-
-        responses = pl.DataFrame(
-            {
-                "realization": realizations_col,
-                "response": resp_col,
-                "time": time_col,
-                "value": vals_col,
-            },
-        )
-
-        observations = pl.DataFrame(
-            {
-                "response": ["FOPR"] * n_obs,
-                "time": [10.0, 20.0],
-                "value": [15.0] * n_obs,
-                "std_dev": [0.5] * n_obs,
-            },
-        )
-
-        # 2. Run the plugin
-        posterior = _run_isolated_update(
-            enif,
-            prior,
-            responses,
-            observations,
-            updatable_keys=[f"PARAM_{p}" for p in range(n_params)],
-            args={"random_seed": 42},
-        )
-
-        self._assert_snapshot(posterior, snapshot, "small_posterior_enif.csv")
-
-    def test_enif_comprehensive_snapshot(self, enif: EnIFUpdate, snapshot: Any) -> None:
-        """The Comprehensive/Large Snapshot. 50 params, 100 obs, 100 realizations.
-        Ensures complex matrix interactions remain stable.
-        """
-        np.random.seed(42)
-        n_reals = 100
-        n_params = 50
-        n_obs = 100
-
-        # 1. Create fixed inputs deterministically
-        prior_data: dict[str, Any] = {"realization": np.arange(n_reals)}
-        for p in range(n_params):
-            prior_data[f"P{p}"] = np.random.normal(loc=0.0, scale=1.0, size=n_reals)
-        prior = pl.DataFrame(prior_data)
-
-        # To keep generation fast, vectorize responses
-        obs_keys = np.tile([f"W_{o % 5}" for o in range(n_obs)], n_reals)
-        time_keys = np.tile([float(o // 5) for o in range(n_obs)], n_reals)
-        real_ids = np.repeat(np.arange(n_reals), n_obs)
-        # Responses are a random linear combination of params + noise
-        weights = np.random.normal(size=(n_params, n_obs))
-        param_matrix = np.column_stack([prior_data[f"P{p}"] for p in range(n_params)])
-        resp_matrix = param_matrix @ weights + np.random.normal(
-            scale=0.1,
-            size=(n_reals, n_obs),
-        )
-
-        responses = pl.DataFrame(
-            {
-                "realization": real_ids,
-                "well_id": obs_keys,
-                "time": time_keys,
-                "value": resp_matrix.flatten(),
-            },
-        )
-
-        observations = pl.DataFrame(
-            {
-                "well_id": [f"W_{o % 5}" for o in range(n_obs)],
-                "time": [float(o // 5) for o in range(n_obs)],
-                "value": np.random.normal(size=n_obs),
-                "std_dev": np.ones(n_obs) * 0.1,
-            },
-        )
-
-        # 2. Run the plugin
-        posterior = _run_isolated_update(
-            enif,
-            prior,
-            responses,
-            observations,
-            updatable_keys=[f"P{p}" for p in range(n_params)],
-        )
-
-        assert posterior.shape == prior.shape
-
-
-class TestEnIFEdgeCases:
-    """Testing DA edge cases like missing observations or failed realizations."""
-
-    def test_ensemble_collapse(self, enif: EnIFUpdate) -> None:
-        """Ensemble collapse (0 variance) should be handled gracefully
-        without catastrophic crashes.
-        """
-        prior = pl.DataFrame(
-            {
-                "realization": [0, 1, 2, 3],
-                "PARAM1": [5.0, 5.0, 5.0, 5.0],  # Variance = 0
-            },
-        )
-
-        responses = pl.DataFrame(
-            {
-                "realization": [0, 1, 2, 3],
-                "well_id": ["W1"] * 4,
-                "time": [5.0] * 4,
-                "value": [10.0, 10.0, 10.0, 10.0],
-            },
-        )
-
-        observations = pl.DataFrame(
-            {
-                "well_id": ["W1"],
-                "time": [5.0],
-                "value": [20.0],
-                "std_dev": [1.0],
-            },
-        )
-
-        # If it crashes, it fails the test. If it raises a clear error
-        # or returns clean, it passes.
-        try:
-            posterior = _run_isolated_update(
-                enif,
-                prior,
-                responses,
-                observations,
-                ["PARAM1"],
-            )
-            assert posterior is not None
-        except RecursionError:
-            pytest.fail("Ensemble collapse caused a RecursionError")
-        except Exception:  # noqa: BLE001, S110
-            pass

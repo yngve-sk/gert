@@ -403,9 +403,22 @@ class TestQueueConfigTranslation:
 
         expected_command = (
             "set -e\n"
-            "curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=RUNNING&step_name=step1' || true\n"
-            "{ (cmd1) > step1.stdout 2> step1.stderr ; } || { curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=FAILED&step_name=step1' || true; exit 1; }\n"
-            "curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=COMPLETED&step_name=step1' || true"
+            "gert_curl_retry() {\n"
+            "  local url=$1\n"
+            "  local max_retries=5\n"
+            "  local delay=1\n"
+            "  for i in $(seq 1 $max_retries); do\n"
+            '    if curl -s -f -X POST "$url" >/dev/null; then\n'
+            "      return 0\n"
+            "    fi\n"
+            "    sleep $delay\n"
+            "    delay=$((delay * 2))\n"
+            "  done\n"
+            "  return 0\n"
+            "}\n"
+            "gert_curl_retry 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=RUNNING&step_name=step1'\n"
+            "{ (cmd1) > step1.stdout 2> step1.stderr ; } || { gert_curl_retry 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=FAILED&step_name=step1'; exit 1; }\n"
+            "gert_curl_retry 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=COMPLETED&step_name=step1'"
         )
 
         assert spec.arguments == ["-c", expected_command]

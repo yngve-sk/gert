@@ -1106,6 +1106,23 @@ async def update_step_status(
         new_status,
         step_name,
     )
+
+    server_state = ServerState.get()
+    exec_data = server_state.executions.get(execution_id)
+    if exec_data and exec_data.orchestrator:
+        if new_status == "COMPLETED":
+            await exec_data.orchestrator.record_realization_complete(
+                iteration,
+                realization_id,
+                step_name,
+            )
+        elif new_status == "FAILED":
+            await exec_data.orchestrator.record_realization_fail(
+                iteration,
+                realization_id,
+                step_name,
+            )
+
     return {"status": "success"}
 
 
@@ -1138,7 +1155,7 @@ async def get_step_logs(
     )
     try:
         stdout = api.get_step_log(
-            config.name,
+            experiment_id,
             execution_id,
             iteration,
             realization_id,
@@ -1146,7 +1163,7 @@ async def get_step_logs(
             "stdout",
         )
         stderr = api.get_step_log(
-            config.name,
+            experiment_id,
             execution_id,
             iteration,
             realization_id,
@@ -1358,7 +1375,7 @@ async def get_update_metadata(
     )
     try:
         return api.get_update_metadata(
-            experiment_id=config.name,
+            experiment_id=experiment_id,
             execution_id=execution_id,
             iteration=iteration,
         )

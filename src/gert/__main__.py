@@ -146,6 +146,10 @@ def _ensure_server(  # noqa: C901
                 if stderr:
                     print(f"Stderr:\n{stderr}")
             server_process.terminate()
+            try:
+                server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server_process.kill()
             sys.exit(1)
 
         return server_process, url
@@ -327,7 +331,11 @@ def run_experiment(
         if server_process is not None:
             print("Shutting down temporary server...")
             server_process.terminate()
-            server_process.wait()
+            try:
+                server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("Force killing temporary server...")
+                server_process.kill()
 
             if "config_data" in locals() and "config_id" in locals():
                 _move_logs(config_data, config_id)
@@ -392,7 +400,11 @@ def _handle_run_command(args: argparse.Namespace) -> None:
 
 
 def _handle_server_command(args: argparse.Namespace) -> None:
-    """Handle the 'gert server' command."""
+    """Handle the 'gert server' command.
+
+    Raises:
+        OSError: If there are underlying socket/port-binding issues that are unhandled.
+    """
     configure_server_logging()
     port = args.port if args.port != 0 else get_free_port()
     host = args.host
@@ -407,12 +419,29 @@ def _handle_server_command(args: argparse.Namespace) -> None:
         pid=pid,
     )
 
+    discovery_file = get_discovery_file()
     try:
-        discovery_file = get_discovery_file()
         discovery_file.parent.mkdir(parents=True, exist_ok=True)
         with discovery_file.open("w", encoding="utf-8") as f:
             f.write(connection_info.model_dump_json(indent=2))
-        print(f"Starting GERT server on {host}:{port}...")
+
+        print("\n" + "=" * 60)
+        print(f"🚀 GERT Server started successfully (PID: {pid})")
+        print("=" * 60)
+        print(f"⚙️  API Base URL       : {connection_info.base_url}")
+        print(f"📖 API Documentation  : {connection_info.base_url}/docs")
+        print(f"🖥️  Web GUI            : {connection_info.base_url}/")
+        print(
+            f"📥 Status Endpoint    : {connection_info.base_url}/experiments/{{id}}"
+            "/executions/{exec_id}/ensembles/{iter}/realizations/{real_id}/status",
+        )
+        print(
+            f"📥 Data Ingestion     : {connection_info.base_url}/experiments/{{id}}"
+            "/executions/{exec_id}/ensembles/{iter}/realizations/{real_id}/responses",
+        )
+        print("=" * 60 + "\n")
+        print("Press Ctrl+C to gracefully shut down the server.\n")
+
         gert_app = create_gert_server(conn_info=connection_info)
         uvicorn.run(
             gert_app,
@@ -420,9 +449,26 @@ def _handle_server_command(args: argparse.Namespace) -> None:
             port=port,
             reload=args.reload,
         )
+    except OSError as e:
+        if e.errno in {98, 48}:  # Address already in use
+            print(f"\n❌ Error: Port {port} is already in use.", file=sys.stderr)
+            print(
+                "This usually means a GERT server is already running in the "
+                "background,\nor it did not shut down successfully.",
+                file=sys.stderr,
+            )
+            print(
+                "\nPlease kill the existing process using that port, or start\n"
+                "the server on a different port using `--port <number>`.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nShutting down GERT server...")
     finally:
         if discovery_file.exists():
             discovery_file.unlink()
+        print("Shutdown complete.")
 
 
 def _handle_monitor_command(args: argparse.Namespace) -> None:
@@ -435,8 +481,13 @@ def _handle_monitor_command(args: argparse.Namespace) -> None:
     finally:
         client.close()
         if server_process:
+            print("Stopping temporary GERT server...")
             server_process.terminate()
-            server_process.wait()
+            try:
+                server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("Force killing temporary GERT server...")
+                server_process.kill()
 
 
 def _handle_connect_command(args: argparse.Namespace) -> None:
@@ -482,7 +533,11 @@ def _handle_connect_command(args: argparse.Namespace) -> None:
         if server_process is not None:
             print("Shutting down temporary server...")
             server_process.terminate()
-            server_process.wait()
+            try:
+                server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("Force killing temporary server...")
+                server_process.kill()
 
 
 def _handle_connection_subcommands(args: argparse.Namespace) -> None:
@@ -766,14 +821,34 @@ def _handle_ui_command(args: argparse.Namespace) -> None:  # noqa: C901
         else:
             url = f"{resolved_api_url}/"
 
+        print("\n" + "=" * 60)
+        print("🚀 GERT Web GUI is ready!")
+        print("=" * 60)
+        print(f"🖥️  Web GUI URL        : {resolved_api_url}")
+        print(f"⚙️  API Base URL       : {resolved_api_url}")
+        print(
+            f"📥 Status Endpoint    : {resolved_api_url}/experiments/{{id}}/executions/{{exec_id}}/ensembles/{{iter}}/realizations/{{real_id}}/status",
+        )
+        print(
+            f"📥 Data Ingestion     : {resolved_api_url}/experiments/{{id}}/executions/{{exec_id}}/ensembles/{{iter}}/realizations/{{real_id}}/responses",
+        )
+        if server_process:
+            print(
+                f"\n⚠️  Note: Running temporary, embedded API server (PID: {server_process.pid}).",
+            )
+            print("          This server will be destroyed when you exit this command.")
+        else:
+            print(f"\n✅ Connected to existing GERT API server at {resolved_api_url}")
+        print("=" * 60 + "\n")
+        print("Press Ctrl+C to shut down.")
+
         # Prevent browser open during tests
         if os.environ.get("BROWSER") != "none":
             logger.info(f"Opening GERT Web GUI at {url}")
-            print(f"Opening GERT Web GUI at {url}")
+            print(f"Opening browser at {url} ...")
             webbrowser.open(url)
 
         if server_process or vite_process:
-            print("Running temporary GERT server. Press Ctrl+C to stop.")
             # Block until the user kills the process
             if server_process:
                 server_process.wait()
@@ -781,18 +856,32 @@ def _handle_ui_command(args: argparse.Namespace) -> None:  # noqa: C901
                 vite_process.wait()
 
     except KeyboardInterrupt:
-        print("\nShutting down GERT UI server...")
+        print("\nInitiating graceful shutdown...")
     except Exception:
         logger.exception("Failed to launch UI")
         sys.exit(1)
     finally:
         client.close()
+
         if server_process:
+            print("Stopping embedded API Server...")
             server_process.terminate()
-            server_process.wait()
+            try:
+                server_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("⚠️  API Server did not shut down gracefully. Force killing...")
+                server_process.kill()
+
         if vite_process:
+            print("Stopping Vite HMR Server...")
             vite_process.terminate()
-            vite_process.wait()
+            try:
+                vite_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("⚠️  Vite Server did not shut down gracefully. Force killing...")
+                vite_process.kill()
+
+        print("Shutdown complete.")
 
 
 def main() -> None:

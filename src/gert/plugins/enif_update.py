@@ -1,5 +1,6 @@
 """Ensemble Information Filter (EnIF) plugin."""
 
+import logging
 from typing import Any
 
 import networkx as nx
@@ -14,6 +15,8 @@ from sklearn.preprocessing import StandardScaler
 from gert.experiments.models import ParameterMetadata
 from gert.updates.base import UpdateAlgorithm
 from gert.updates.spatial import SpatialToolkit
+
+logger = logging.getLogger(__name__)
 
 
 class EnIFUpdate(UpdateAlgorithm):
@@ -86,10 +89,6 @@ class EnIFUpdate(UpdateAlgorithm):
         if not x_arrays:
             return parameters.clone()
 
-        X = np.hstack(x_arrays)
-        scaler = StandardScaler(copy=True)
-        X_scaled = scaler.fit_transform(X)
-
         # 4. Extract Observations (d and sigma)
         d = observations["value"].to_numpy()
         sigma = observations["std_dev"].to_numpy()
@@ -130,7 +129,27 @@ class EnIFUpdate(UpdateAlgorithm):
             on="obs_idx",
         ).sort("realization")
 
-        # Check for any missing observations
+        # Robustification: Match realizations between parameters and responses
+        valid_reals = wide_resp["realization"].unique().to_list()
+        if len(valid_reals) < len(parameters):
+            logger.warning(
+                f"EnIF Update: Only {len(valid_reals)}/{len(parameters)} realizations "
+                f"have responses. Subsetting ensemble for update.",
+            )
+
+        # Subset parameters and X for the update
+        parameters_subset = parameters.filter(pl.col("realization").is_in(valid_reals))
+        X_subset = np.hstack(
+            [
+                arr[parameters["realization"].is_in(valid_reals).to_numpy(), :]
+                for arr in x_arrays
+            ],
+        )
+
+        scaler = StandardScaler(copy=True)
+        X_scaled = scaler.fit_transform(X_subset)
+
+        # Check for any missing observations across ALL valid realizations
         missing_obs = [
             str(i) for i in range(len(obs_df)) if str(i) not in wide_resp.columns
         ]
@@ -237,7 +256,7 @@ class EnIFUpdate(UpdateAlgorithm):
         X_updated = scaler.inverse_transform(X_updated_scaled)
 
         # Construct updated_params_df
-        updated_columns = [parameters["realization"]]
+        updated_columns = [parameters_subset["realization"]]
 
         for pm, (_, start_idx, end_idx) in zip(
             parameter_metadata,
@@ -247,7 +266,7 @@ class EnIFUpdate(UpdateAlgorithm):
             updated_data = X_updated[:, start_idx:end_idx]
 
             if len(pm.columns) == 1:
-                series = parameters[pm.columns[0]]
+                series = parameters_subset[pm.columns[0]]
                 if "List" not in str(series.dtype) and "Array" not in str(series.dtype):
                     # Write back as scalar
                     updated_columns.append(
@@ -279,5 +298,18 @@ class EnIFUpdate(UpdateAlgorithm):
 
         updated_params_df = pl.DataFrame(updated_columns)
 
+        # Merge with prior to retain values for realizations missing responses
+        updatable_prior = parameters.select(["realization", *updatable_cols])
+        # Use update() to overwrite prior values with updated ones where they exist
+        merged_updatable = updatable_prior.update(
+            updated_params_df,
+            on="realization",
+            how="left",
+        )
+
         # Join with static parameters
-        return updated_params_df.join(static_params_df, on="realization", how="left")
+        return merged_updatable.join(
+            static_params_df,
+            on="realization",
+            how="left",
+        ).sort("realization")

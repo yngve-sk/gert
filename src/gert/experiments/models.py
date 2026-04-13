@@ -340,7 +340,10 @@ class QueueConfig(BaseModel):
     """Configuration for the HPC/Job scheduler."""
 
     backend: str = "local"
-    walltime: int | None = None
+    wall_time: str | None = Field(
+        default=None,
+        description="Maximum execution time for a job (e.g., '01:00:00', '30m').",
+    )
     custom_attributes: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -433,6 +436,17 @@ class ExperimentConfig(BaseModel):
     consolidation_interval: float = Field(
         default=5.0,
         description="Interval in seconds for background consolidation",
+    )
+    failure_tolerance: float = Field(
+        default=0.0,
+        description=(
+            "Fraction of realizations (0.0 to 1.0) that can fail "
+            "without failing the entire iteration."
+        ),
+    )
+    iteration_timeout: float | None = Field(
+        default=None,
+        description="Maximum time in seconds to wait for an iteration to complete.",
     )
 
     workdir_files: list[RealizationWorkdirFile] = Field(default_factory=list)

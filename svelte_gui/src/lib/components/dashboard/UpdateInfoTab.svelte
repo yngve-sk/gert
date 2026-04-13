@@ -196,10 +196,21 @@ let daStats = $derived.by(() => {
 					{metadata.status}
 				</span>
 			</div>
-		</header>
+			</header>
 
-		<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-			<!-- Execution Metrics -->
+			{#if metadata.error}
+			<aside class="bg-error-500/10 border border-error-500/50 rounded-lg p-3 my-2">
+				<h3 class="text-error-400 font-bold text-xs uppercase tracking-widest mb-1 flex items-center gap-1.5">
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+					</svg>
+					Algorithm Failure
+				</h3>
+				<div class="font-mono text-[10px] text-error-300 break-words whitespace-pre-wrap">{metadata.error}</div>
+			</aside>
+			{/if}
+
+			<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">			<!-- Execution Metrics -->
 			<section class="bg-surface-800 border border-surface-700 rounded p-3">
 				<h3 class="text-xs font-bold uppercase tracking-widest text-surface-400 mb-3 pb-1 border-b border-surface-700/50">Execution Metrics</h3>
 				<div class="space-y-2 text-sm">

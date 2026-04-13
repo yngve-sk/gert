@@ -17,7 +17,7 @@ def test_logs_stream_endpoint() -> None:
     exp_id, _ = next(iter(configs.items()))
 
     with TestClient(app) as client:
-        res = client.post("/experiments", json=configs[exp_id].model_dump())
+        res = client.post("/experiments", json=configs[exp_id].model_dump(mode="json"))
         assert res.status_code == 201
 
         start_res = client.post(f"/experiments/{exp_id}/start")

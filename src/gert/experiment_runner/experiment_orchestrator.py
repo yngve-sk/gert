@@ -140,6 +140,7 @@ class ExperimentOrchestrator:
         self._active_jobs: dict[int, dict[int, str]] = defaultdict(dict)
         # Track realization outcomes
         self._successful_realizations: dict[int, set[int]] = defaultdict(set)
+        # Track failures
         self._failed_realizations: dict[int, set[int]] = defaultdict(set)
 
         # Track individual step outcomes: {iteration: {realization_id: set(step_name)}}
@@ -273,12 +274,21 @@ class ExperimentOrchestrator:
                 except Exception:
                     logger.exception("Monitoring callback failed")
 
-        # A realization is complete only if ALL expected steps are successful
+        # A realization is complete if ALL expected steps are successful,
+        # OR if we received an overarching COMPLETED signal (step_name is None) from PSI/J
         expected_steps = {s.name for s in self._config.forward_model_steps}
-        if (
+        is_complete = (
             expected_steps.issubset(self._successful_steps[iteration][realization_id])
+            or step_name is None
+        )
+        if (
+            is_complete
             and realization_id not in self._successful_realizations[iteration]
         ):
+            # If PSI/J forced completion, explicitly backfill the successful steps
+            if step_name is None:
+                self._successful_steps[iteration][realization_id].update(expected_steps)
+
             msg = (
                 f"Realization {realization_id} fully completed (iteration {iteration})"
             )
@@ -304,6 +314,10 @@ class ExperimentOrchestrator:
         step_name: str | None = None,
     ) -> None:
         """Record that a realization or a specific step has failed."""
+        # If it has already fully succeeded, ignore any delayed/rogue failure signals
+        if realization_id in self._successful_realizations[iteration]:
+            return
+
         if step_name:
             logger.error(
                 f"Step '{step_name}' failed for realization {realization_id} "
@@ -336,14 +350,26 @@ class ExperimentOrchestrator:
         await self._check_iteration_complete(iteration)
 
     async def _check_iteration_complete(self, iteration: int) -> None:
-        """Check if the iteration is finished (all done or any failed)."""
-        num_accounted = len(self._successful_realizations[iteration]) + len(
-            self._failed_realizations[iteration],
-        )
-        all_done = num_accounted == self._expected_realizations[iteration]
-        any_failed = len(self._failed_realizations[iteration]) > 0
+        """Check if the iteration is finished based on failure tolerance."""
+        num_successful = len(self._successful_realizations[iteration])
+        num_failed = len(self._failed_realizations[iteration])
+        num_total = self._expected_realizations[iteration]
 
-        if all_done or any_failed:
+        if num_total == 0:
+            return
+
+        all_accounted = (num_successful + num_failed) == num_total
+
+        # Calculate if we have already failed more than allowed
+        failure_fraction = num_failed / num_total
+        too_many_failures = failure_fraction > self._config.failure_tolerance
+
+        # We trigger completion event if:
+        # 1. All realizations are accounted for (Success or Failure)
+        # 2. We have already exceeded the failure tolerance (Fail Fast)
+        if (all_accounted or too_many_failures) and not self._iteration_events[
+            iteration
+        ].is_set():
             # Yield control briefly to ensure monitoring/polling has a chance
             # to see the final statuses before the orchestrator unblocks
             # and potentially moves to the next iteration.
@@ -365,7 +391,7 @@ class ExperimentOrchestrator:
             # Instead we load the current iteration's parameters that were written
             # at the end of the previous iteration.
             param_df = self._storage_api.get_parameters(
-                self._config.name,
+                self._experiment_id,
                 self._execution_id,
                 self._current_iteration,
             )
@@ -373,7 +399,7 @@ class ExperimentOrchestrator:
         elif self._current_iteration == 0:
             if self._storage_api:
                 self._storage_api.write_parameters(
-                    experiment_id=self._config.name,
+                    experiment_id=self._experiment_id,
                     execution_id=self._execution_id,
                     iteration=0,
                     parameters=current_parameters.to_df(
@@ -394,7 +420,7 @@ class ExperimentOrchestrator:
                 ensemble_path = (
                     Path(self._config.base_working_directory)
                     / self._config.storage_base
-                    / self._config.name
+                    / self._experiment_id
                     / self._execution_id
                     / f"iter-{i}"
                 )
@@ -429,7 +455,7 @@ class ExperimentOrchestrator:
                 if watch_task in consolidation_tasks:
                     watch_task.cancel()
                 await self._storage_api.flush(
-                    experiment_id=self._config.name,
+                    experiment_id=self._experiment_id,
                     execution_id=self._execution_id,
                     iteration=i,
                 )
@@ -447,7 +473,7 @@ class ExperimentOrchestrator:
 
                 if self._storage_api:
                     self._storage_api.write_update_metadata(
-                        self._config.name,
+                        self._experiment_id,
                         self._execution_id,
                         i + 1,
                         metadata,
@@ -456,13 +482,13 @@ class ExperimentOrchestrator:
                 try:
                     # Fetch dependencies early for metrics
                     prior_df = self._storage_api.get_parameters(
-                        self._config.name,
+                        self._experiment_id,
                         self._execution_id,
                         i,
                     )
 
                     summary_data = self._storage_api.get_observation_summary(
-                        self._config.name,
+                        self._experiment_id,
                         self._execution_id,
                         i,
                     )
@@ -489,18 +515,22 @@ class ExperimentOrchestrator:
                         metadata.end_time = datetime.now(tz=UTC).isoformat()
                         metadata.duration_seconds = time.time() - start_ts
                         self._storage_api.write_update_metadata(
-                            self._config.name,
+                            self._experiment_id,
                             self._execution_id,
                             i + 1,
                             metadata,
                         )
-                    raise
+                    # Don't let a math crash take down the server.
+                    # Re-raise to gracefully trigger the surrounding try/except
+                    # in _run_wrapped which correctly handles background execution failures.
+                    msg = f"Algorithm {update_step.algorithm} failed: {e}"
+                    raise RuntimeError(msg) from e
                 finally:
                     if self._storage_api and metadata.status == "COMPLETED":
                         metadata.end_time = datetime.now(tz=UTC).isoformat()
                         metadata.duration_seconds = time.time() - start_ts
                         self._storage_api.write_update_metadata(
-                            self._config.name,
+                            self._experiment_id,
                             self._execution_id,
                             i + 1,
                             metadata,
@@ -508,7 +538,7 @@ class ExperimentOrchestrator:
 
                 # Write posterior parameters to storage for the NEXT iteration
                 self._storage_api.write_parameters(
-                    experiment_id=self._config.name,
+                    experiment_id=self._experiment_id,
                     execution_id=self._execution_id,
                     iteration=i + 1,
                     parameters=updated_params_df,
@@ -592,7 +622,7 @@ class ExperimentOrchestrator:
             raise ValueError(msg)
 
         workdir = self._workdir_manager.create_workdir(
-            experiment_id=self._config.name,
+            experiment_id=self._experiment_id,
             execution_id=self._execution_id,
             iteration=iteration,
             realization=realization_id,
@@ -659,7 +689,7 @@ class ExperimentOrchestrator:
                 )
         return execution_steps
 
-    def _create_status_callback(
+    def _create_status_callback(  # noqa: C901
         self,
         iteration: int,
         realization_id: int,
@@ -669,87 +699,101 @@ class ExperimentOrchestrator:
         """Create a status callback for a job."""
         loop = asyncio.get_running_loop()
 
-        def _status_cb(_job: psij.Job, status: psij.JobStatus) -> None:
-            if status.final:
-                # Move logs from workdir to permanent storage
-                logs_transferred = False
-                for step in execution_steps:
-                    name = step["name"]
-                    stdout_file = workdir / f"{name}.stdout"
-                    stderr_file = workdir / f"{name}.stderr"
+        def _status_cb(_job: psij.Job, status: psij.JobStatus) -> None:  # noqa: C901
+            try:
+                if status.final:
+                    # Move logs from workdir to permanent storage
+                    logs_transferred = False
+                    for step in execution_steps:
+                        name = step["name"]
+                        stdout_file = workdir / f"{name}.stdout"
+                        stderr_file = workdir / f"{name}.stderr"
 
-                    if stdout_file.exists():
-                        self._storage_api.write_step_log(
-                            self._config.name,
-                            self._execution_id,
-                            iteration,
-                            realization_id,
-                            name,
-                            stdout_file.read_text(encoding="utf-8"),
-                            "stdout",
+                        if stdout_file.exists():
+                            self._storage_api.write_step_log(
+                                self._experiment_id,
+                                self._execution_id,
+                                iteration,
+                                realization_id,
+                                name,
+                                stdout_file.read_text(encoding="utf-8"),
+                                "stdout",
+                            )
+                            logs_transferred = True
+                        if stderr_file.exists():
+                            self._storage_api.write_step_log(
+                                self._experiment_id,
+                                self._execution_id,
+                                iteration,
+                                realization_id,
+                                name,
+                                stderr_file.read_text(encoding="utf-8"),
+                                "stderr",
+                            )
+                            logs_transferred = True
+
+                    # If it failed but no logs were found, capture PSI/J or shell errors
+                    if status.state == psij.JobState.FAILED and not logs_transferred:
+                        msg = f"Job failed without producing logs. Status: {status.message}"
+                        first_step = (
+                            execution_steps[0]["name"] if execution_steps else "unknown"
                         )
-                        logs_transferred = True
-                    if stderr_file.exists():
                         self._storage_api.write_step_log(
-                            self._config.name,
+                            self._experiment_id,
                             self._execution_id,
                             iteration,
                             realization_id,
-                            name,
-                            stderr_file.read_text(encoding="utf-8"),
+                            first_step,
+                            msg,
                             "stderr",
                         )
-                        logs_transferred = True
 
-                # If it failed but no logs were found, capture PSI/J or shell errors
-                if status.state == psij.JobState.FAILED and not logs_transferred:
-                    msg = f"Job failed without producing logs. Status: {status.message}"
-                    first_step = (
-                        execution_steps[0]["name"] if execution_steps else "unknown"
-                    )
-                    self._storage_api.write_step_log(
-                        self._config.name,
-                        self._execution_id,
-                        iteration,
-                        realization_id,
-                        first_step,
-                        msg,
-                        "stderr",
-                    )
+                    # Track outcome from scheduler (primary role: catch failures, fallback for completions)
+                    if status.state in {
+                        psij.JobState.FAILED,
+                        psij.JobState.CANCELED,
+                    }:
+                        err_msg = getattr(status, "message", None) or getattr(
+                            status,
+                            "exception",
+                            "No message",
+                        )
+                        logger.error(
+                            f"PSI/J reported {status.state.name} "
+                            f"for realization {realization_id}: "
+                            f"{err_msg}",
+                        )
+                        asyncio.run_coroutine_threadsafe(
+                            self.record_realization_fail(iteration, realization_id),
+                            loop,
+                        )
+                    elif status.state == psij.JobState.COMPLETED:
+                        # If the script exits 0, we can safely guarantee it finished its python
+                        # execution and flushed to disk, even if the final curl failed over the network.
+                        asyncio.run_coroutine_threadsafe(
+                            self.record_realization_complete(
+                                iteration,
+                                realization_id,
+                                None,
+                            ),
+                            loop,
+                        )
 
-                # Track outcome from scheduler (primary role: catch failures)
-                if status.state in {
-                    psij.JobState.FAILED,
-                    psij.JobState.CANCELED,
-                }:
-                    err_msg = getattr(status, "message", None) or getattr(
-                        status,
-                        "exception",
-                        "No message",
-                    )
-                    logger.error(
-                        f"PSI/J reported {status.state.name} "
-                        f"for realization {realization_id}: "
-                        f"{err_msg}",
-                    )
-                    asyncio.run_coroutine_threadsafe(
-                        self.record_realization_fail(iteration, realization_id),
-                        loop,
-                    )  # Note: psij.JobState.COMPLETED is intentionally ignored here.
-                # We wait for the SDK to call the /complete HTTP endpoint
-                # to guarantee that all data ingestion is finished.
-
-            if self._monitoring_callback:
-                try:
-                    loop.call_soon_threadsafe(
-                        self._monitoring_callback,
-                        realization_id,
-                        iteration,
-                        status.state.name,
-                        None,
-                    )
-                except Exception:
-                    logger.exception("Monitoring callback threadsafe failed")
+                if self._monitoring_callback:
+                    try:
+                        loop.call_soon_threadsafe(
+                            self._monitoring_callback,
+                            realization_id,
+                            iteration,
+                            status.state.name,
+                            None,
+                        )
+                    except Exception:
+                        logger.exception("Monitoring callback threadsafe failed")
+            except Exception:
+                logger.exception(
+                    f"Unexpected error in status callback for realization {realization_id}",
+                )
 
         return _status_cb
 
@@ -827,51 +871,70 @@ class ExperimentOrchestrator:
         """Wait until all realizations in the iteration are final or paused.
 
         Raises:
-            ValueError: If the iteration finishes early or has failures.
+            ValueError: If the iteration times out.
         """
         if self._expected_realizations.get(iteration, 0) == 0:
             return
 
-        # Replace hardcoded timeout with indefinitely waiting for completion or pause
         tasks = [
             asyncio.create_task(self._iteration_events[iteration].wait()),
             asyncio.create_task(self._pause_event.wait()),
         ]
 
-        _done, pending = await asyncio.wait(
-            tasks,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        try:
+            timeout = self._config.iteration_timeout
+            done, pending = await asyncio.wait(
+                tasks,
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-        for task in pending:
-            task.cancel()
+            for task in pending:
+                task.cancel()
 
+            if timeout is not None and not done:
+                msg = f"Iteration {iteration} timed out after {timeout} seconds."
+                logger.error(msg)
+                raise ValueError(msg)
+
+        except Exception:
+            for task in tasks:
+                task.cancel()
+            raise
+
+        await self._handle_iteration_end(iteration)
+
+    async def _handle_iteration_end(self, iteration: int) -> None:
+        """Handle final state of iteration after waiting.
+
+        Raises:
+            ValueError: If the iteration finishes with too many failures.
+        """
         if self._force_pause:
             return
 
-        # If graceful pause, wait for remaining to finish
-        if self._pause_event.is_set() and not self._force_pause:
+        if self._pause_event.is_set():
             await self._iteration_events[iteration].wait()
 
-        # If not forcefully paused, check if there were failures
-        if not self._force_pause:
-            num_success = len(self._successful_realizations[iteration])
-            num_failed = len(self._failed_realizations[iteration])
-            num_total = self._expected_realizations.get(iteration, 0)
+        num_success = len(self._successful_realizations[iteration])
+        num_failed = len(self._failed_realizations[iteration])
+        num_total = self._expected_realizations.get(iteration, 0)
 
-            if num_success + num_failed < num_total:
-                msg = (
-                    f"Iteration {iteration} finished early. "
-                    f"{num_success}/{num_total} succeeded, {num_failed} failed."
-                )
-                raise ValueError(msg)
+        failure_fraction = num_failed / num_total if num_total > 0 else 0
 
-            if num_failed > 0:
-                msg = (
-                    f"Iteration {iteration} failed: "
-                    f"{num_failed}/{num_total} realizations failed."
-                )
-                raise ValueError(msg)
+        if failure_fraction > self._config.failure_tolerance:
+            msg = (
+                f"Iteration {iteration} failed: "
+                f"{num_failed}/{num_total} realizations failed "
+                f"(Tolerance: {self._config.failure_tolerance})."
+            )
+            raise ValueError(msg)
+
+        if num_success + num_failed < num_total:
+            logger.warning(
+                f"Iteration {iteration} finished early due to failures. "
+                f"Success: {num_success}, Failed: {num_failed}, Total: {num_total}",
+            )
 
     async def perform_update(self, iteration: int) -> pl.DataFrame:
         """Invoke the math plugin for the given iteration.
@@ -888,10 +951,10 @@ class ExperimentOrchestrator:
         """
         # 0. Ensure data is consolidated before fetching
         logger.info(f"Performing mathematical update for iteration {iteration}")
-        await self._storage_api.consolidate(self._config.name, self._execution_id)
+        await self._storage_api.consolidate(self._experiment_id, self._execution_id)
         # Force flush the current iteration specifically to ensure everything is drained
         await self._storage_api.flush(
-            self._config.name,
+            self._experiment_id,
             self._execution_id,
             iteration,
         )
@@ -899,7 +962,7 @@ class ExperimentOrchestrator:
         # 1. Fetch data from storage
         # current_parameters (from storage for this iteration)
         current_params_df = self._storage_api.get_parameters(
-            experiment_id=self._config.name,
+            experiment_id=self._experiment_id,
             execution_id=self._execution_id,
             iteration=iteration,
         )
@@ -907,7 +970,7 @@ class ExperimentOrchestrator:
         obs_df = self._observations_to_df()
         try:
             sim_resp_df = self._storage_api.get_responses(
-                experiment_id=self._config.name,
+                experiment_id=self._experiment_id,
                 execution_id=self._execution_id,
                 iteration=iteration,
             )
@@ -917,7 +980,7 @@ class ExperimentOrchestrator:
             ensemble_path = (
                 Path(self._config.base_working_directory)
                 / self._config.storage_base
-                / self._config.name
+                / self._experiment_id
                 / self._execution_id
                 / f"iter-{iteration}"
             )
