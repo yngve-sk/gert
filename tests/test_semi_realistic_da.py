@@ -49,11 +49,11 @@ def test_semi_realistic_da_convergence(
         client.base_url = api_url
 
         # 2. Register and start experiment
-        resp = client.post("/experiments", json=config_data)
+        resp = client.post("/api/experiments", json=config_data)
         assert resp.status_code == 201
         experiment_id = resp.json()["id"]
 
-        resp = client.post(f"/experiments/{experiment_id}/start")
+        resp = client.post(f"/api/experiments/{experiment_id}/start")
         assert resp.status_code == 200
         execution_id = resp.json()["execution_id"]
 
@@ -67,7 +67,7 @@ def test_semi_realistic_da_convergence(
         completed = False
         while time.time() - start_time < max_wait:
             state_resp = client.get(
-                f"/experiments/{experiment_id}/executions/{execution_id}/state",
+                f"/api/experiments/{experiment_id}/executions/{execution_id}/state",
             )
             state_resp.raise_for_status()
             exec_state = state_resp.json()
@@ -87,7 +87,7 @@ def test_semi_realistic_da_convergence(
             pytest.fail(f"Experiment did not complete in {max_wait}s.")
 
         resp = client.get(
-            f"/experiments/{experiment_id}/executions/{execution_id}/status",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/status",
         )
         assert resp.status_code == 200
         statuses = resp.json()
@@ -115,7 +115,7 @@ def test_semi_realistic_da_convergence(
 
         for it in range(num_iterations):
             params_resp = client.get(
-                f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{it}/parameters",
+                f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{it}/parameters",
             )
             assert params_resp.status_code == 200
             df = pl.read_parquet(io.BytesIO(params_resp.content))

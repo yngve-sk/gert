@@ -58,7 +58,7 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
         )
 
     gert_server_app.state.connection_info = conn_info
-    gert_server_app.include_router(router)
+    gert_server_app.include_router(router, prefix="/api")
 
     # M12: Mount the compiled SvelteKit GUI
     static_dir = pathlib.Path(__file__).parent / "static"
@@ -78,7 +78,7 @@ def create_gert_server(conn_info: ConnectionInfo | None = None) -> FastAPI:
             path = request.url.path
 
             # If the request is explicitly an API call, preserve the 404 JSON response
-            if path.startswith(("/experiments", "/logs", "/connection-info")):
+            if path.startswith("/api"):
                 detail = "Not Found"
                 if hasattr(exc, "detail"):
                     detail = exc.detail

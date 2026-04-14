@@ -16,10 +16,8 @@ def setup_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
 
-async def test_storage_integration_blast() -> None:
+async def test_storage_integration_blast(client: TestClient) -> None:
     """Blast 100 concurrent payloads and verify consolidation."""
-    client = TestClient(gert_server_app)
-
     # Register an experiment
     config_data = {
         "name": "blast-test",
@@ -29,13 +27,13 @@ async def test_storage_integration_blast() -> None:
         "parameter_matrix": {"metadata": {}, "values": {}, "datasets": []},
         "observations": [],
     }
-    response = client.post("/experiments", json=config_data)
+    response = client.post("/api/experiments", json=config_data)
     assert response.status_code == 201
     experiment_id = response.json()["id"]
     # For storage tests, execution_id can be the same as experiment_id
     # but the API now requires both in the path.
 
-    start_resp = client.post(f"/experiments/{experiment_id}/start")
+    start_resp = client.post(f"/api/experiments/{experiment_id}/start")
     assert start_resp.status_code == 200
     execution_id = start_resp.json()["execution_id"]
 
@@ -56,7 +54,7 @@ async def test_storage_integration_blast() -> None:
 
     for payload in payloads:
         response = client.post(
-            f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
             json=payload,
         )
         assert response.status_code == 202
@@ -72,7 +70,7 @@ async def test_storage_integration_blast() -> None:
 
     # 2. Retrieve responses
     response = client.get(
-        f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+        f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
     )
     assert response.status_code == 200
 
@@ -88,11 +86,10 @@ async def test_storage_integration_blast() -> None:
 
 
 @pytest.mark.asyncio
-async def test_storage_integration_concurrent_blast() -> None:
+async def test_storage_integration_concurrent_blast(client: TestClient) -> None:
     """Blast 100 payloads concurrently using httpx.AsyncClient."""
     # TestClient doesn't support true concurrency in the same way,
     # but we can use httpx.AsyncClient with the app.
-    client = TestClient(gert_server_app)
     config_data = {
         "name": "concurrent-blast-test",
         "base_working_directory": ".",
@@ -101,11 +98,11 @@ async def test_storage_integration_concurrent_blast() -> None:
         "parameter_matrix": {"metadata": {}, "values": {}, "datasets": []},
         "observations": [],
     }
-    response = client.post("/experiments", json=config_data)
+    response = client.post("/api/experiments", json=config_data)
     assert response.status_code == 201
     experiment_id = response.json()["id"]
 
-    start_resp = client.post(f"/experiments/{experiment_id}/start")
+    start_resp = client.post(f"/api/experiments/{experiment_id}/start")
     assert start_resp.status_code == 200
     execution_id = start_resp.json()["execution_id"]
 
@@ -127,7 +124,7 @@ async def test_storage_integration_concurrent_blast() -> None:
             }
             tasks.append(
                 ac.post(
-                    f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
+                    f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
                     json=payload,
                 ),
             )
@@ -147,9 +144,8 @@ async def test_storage_integration_concurrent_blast() -> None:
     await worker.consolidate()
 
     # Verify via regular TestClient
-    client = TestClient(gert_server_app)
     response = client.get(
-        f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+        f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
     )
     assert response.status_code == 200
     df = pl.read_parquet(io.BytesIO(response.content))

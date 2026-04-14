@@ -9,7 +9,6 @@ import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
-from gert.server.gert_server import gert_server_app
 from gert.storage.consolidation import ConsolidationWorker
 
 
@@ -17,11 +16,10 @@ from gert.storage.consolidation import ConsolidationWorker
 async def test_end_to_end_local_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    client: TestClient,
 ) -> None:
     """Test a full end-to-end local execution loop."""
     monkeypatch.chdir(tmp_path)
-    client = TestClient(gert_server_app)
-
     # 1. Register experiment
     config_data: dict[str, Any] = {
         "name": "e2e-test",
@@ -63,7 +61,7 @@ async def test_end_to_end_local_run(
         ],
     }
 
-    response = client.post("/experiments", json=config_data)
+    response = client.post("/api/experiments", json=config_data)
     assert response.status_code == 201
     experiment_id = response.json()["id"]
 
@@ -71,7 +69,7 @@ async def test_end_to_end_local_run(
     # Note: Currently start_experiment is synchronous and runs everything immediately.
     # In a real app it would be a background task.
     # Also, the dummy FM writes to 'response.json' in its workdir.
-    response = client.post(f"/experiments/{experiment_id}/start")
+    response = client.post(f"/api/experiments/{experiment_id}/start")
     assert response.status_code == 200
     res_json = response.json()
     execution_id = res_json["execution_id"]
@@ -106,7 +104,7 @@ async def test_end_to_end_local_run(
             payload = json.loads(f.read())
             # Replace placeholder if needed, but dummy FM already has real values
             client.post(
-                f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
+                f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/ingest",
                 json=payload,
             )
 
@@ -122,7 +120,7 @@ async def test_end_to_end_local_run(
 
     # 4. Verify consolidated data
     response = client.get(
-        f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
+        f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{iteration}/responses",
     )
     assert response.status_code == 200
     df = pl.read_parquet(io.BytesIO(response.content))

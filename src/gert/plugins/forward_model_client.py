@@ -102,7 +102,7 @@ class GertForwardModelClient:
             value=value,
         )
         endpoint = (
-            f"/experiments/{self.experiment_id}/executions/"
+            f"/api/experiments/{self.experiment_id}/executions/"
             f"{self.execution_id}/ensembles/{self.iteration}/ingest"
         )
         self._post_with_retry(endpoint, payload.model_dump())
@@ -110,7 +110,7 @@ class GertForwardModelClient:
     def mark_complete(self) -> None:
         """Explicitly signal that this realization has finished successfully."""
         endpoint = (
-            f"/experiments/{self.experiment_id}/executions/{self.execution_id}/"
+            f"/api/experiments/{self.experiment_id}/executions/{self.execution_id}/"
             f"ensembles/{self.iteration}/realizations/{self.realization_id}/complete"
         )
         # We can send an empty body or some metadata if needed
@@ -119,7 +119,7 @@ class GertForwardModelClient:
     def mark_failed(self, error_message: str, traceback_str: str | None = None) -> None:
         """Explicitly signal that this realization has failed."""
         endpoint = (
-            f"/experiments/{self.experiment_id}/executions/{self.execution_id}/"
+            f"/api/experiments/{self.experiment_id}/executions/{self.execution_id}/"
             f"ensembles/{self.iteration}/realizations/{self.realization_id}/fail"
         )
         payload = {

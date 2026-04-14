@@ -63,7 +63,7 @@ def test_find_gert_server_success(
     info = find_gert_server()
 
     assert info.model_dump() == SERVER_INFO
-    mock_http_instance.get.assert_called_once_with("/connection-info")
+    mock_http_instance.get.assert_called_once_with("/api/connection-info")
 
 
 def test_find_gert_server_no_file() -> None:

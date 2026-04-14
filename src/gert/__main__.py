@@ -135,7 +135,7 @@ def _check_execution_state(
 ) -> None:
     """Check overall execution state and exit if failed."""
     state_resp = client.get(
-        f"/experiments/{experiment_id}/executions/{execution_id}/state",
+        f"/api/experiments/{experiment_id}/executions/{execution_id}/state",
     )
     state_resp.raise_for_status()
     exec_state = state_resp.json()
@@ -164,7 +164,7 @@ def _poll_for_completion(
             _check_execution_state(client, experiment_id, execution_id)
 
             resp = client.get(
-                f"/experiments/{experiment_id}/executions/{execution_id}/status",
+                f"/api/experiments/{experiment_id}/executions/{execution_id}/status",
             )
             resp.raise_for_status()
             statuses = resp.json()
@@ -233,13 +233,13 @@ def run_experiment(
         print(f"Submitting '{config_path}' to GERT server at {resolved_api_url}...")
 
         # 1. Register the experiment
-        response = client.post("/experiments", json=config_data)
+        response = client.post("/api/experiments", json=config_data)
         response.raise_for_status()
         config_id = response.json()["id"]
         print(f"✅ Experiment registered (Config ID: {config_id})")
 
         # 2. Start the execution
-        response = client.post(f"/experiments/{config_id}/start")
+        response = client.post(f"/api/experiments/{config_id}/start")
         response.raise_for_status()
         res_json = response.json()
         execution_id = res_json["execution_id"]
@@ -278,7 +278,7 @@ def run_experiment(
             print("You can query the consolidated responses using:")
             print(
                 f"  curl "
-                f"{resolved_api_url}/experiments/{config_id}/executions/{execution_id}"
+                f"{resolved_api_url}/api/experiments/{config_id}/executions/{execution_id}"
                 f"/ensembles/{last_it}/responses",
             )
 
@@ -425,7 +425,7 @@ def _handle_connect_command(args: argparse.Namespace) -> None:
         client.base_url = resolved_api_url
 
         # Find experiment ID by name
-        resp = client.get("/experiments")
+        resp = client.get("/api/experiments")
         resp.raise_for_status()
         experiments = resp.json()
 
@@ -440,7 +440,7 @@ def _handle_connect_command(args: argparse.Namespace) -> None:
                 f"Experiment '{exp_name}' not recognized by server. "
                 f"Registering configuration...",
             )
-            resp = client.post("/experiments", json=config_data)
+            resp = client.post("/api/experiments", json=config_data)
             resp.raise_for_status()
             experiment_id = resp.json()["id"]
 
@@ -693,7 +693,7 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
             try:
                 # Use the new endpoint with ID override
                 client.post(
-                    "/experiments",
+                    "/api/experiments",
                     params={"id": exp_id},
                     content=config.model_dump_json(),
                     headers={"Content-Type": "application/json"},
@@ -704,7 +704,7 @@ def _handle_ui_command(args: argparse.Namespace) -> None:
                 logger.exception(f"Failed to register experiment '{exp_id}'")
 
         if len(scanned_configs) == 1 and last_registered_exp_id:
-            url = f"{resolved_api_url}/experiments/{last_registered_exp_id}"
+            url = f"{resolved_api_url}/api/experiments/{last_registered_exp_id}"
         else:
             url = f"{resolved_api_url}/"
 

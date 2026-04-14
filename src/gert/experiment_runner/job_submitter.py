@@ -112,7 +112,7 @@ class JobSubmitter:
 
             if monitoring_url and experiment_id and execution_id:
                 base_status_url = (
-                    f"{monitoring_url}/experiments/{experiment_id}/executions/"
+                    f"{monitoring_url}/api/experiments/{experiment_id}/executions/"
                     f"{execution_id}/ensembles/{iteration}/realizations/"
                     f"{realization_id}/status"
                 )

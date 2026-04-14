@@ -36,7 +36,7 @@ export interface ObservationSummary {
 export async function listExperiments(
 	fetchInstance: typeof fetch = fetch,
 ): Promise<Experiment[]> {
-	const response = await fetchInstance("/experiments");
+	const response = await fetchInstance("/api/experiments");
 	if (!response.ok) {
 		throw new Error(`Failed to fetch experiments: ${response.statusText}`);
 	}
@@ -50,7 +50,7 @@ export async function getExperimentConfig(
 	experimentId: string,
 	fetchInstance: typeof fetch = fetch,
 ): Promise<ExperimentConfig> {
-	const response = await fetchInstance(`/experiments/${experimentId}/config`);
+	const response = await fetchInstance(`/api/experiments/${experimentId}/config`);
 	if (!response.ok) {
 		throw new Error(
 			`Failed to fetch experiment config: ${response.statusText}`,
@@ -67,7 +67,7 @@ export async function listExecutions(
 	fetchInstance: typeof fetch = fetch,
 ): Promise<ExecutionState[]> {
 	const response = await fetchInstance(
-		`/experiments/${experimentId}/executions`,
+		`/api/experiments/${experimentId}/executions`,
 	);
 	if (!response.ok) {
 		throw new Error(`Failed to fetch executions: ${response.statusText}`);
@@ -84,7 +84,7 @@ export async function pauseExecution(
 	fetchInstance: typeof fetch = fetch,
 ): Promise<void> {
 	const response = await fetchInstance(
-		`/experiments/${experimentId}/executions/${executionId}/pause`,
+		`/api/experiments/${experimentId}/executions/${executionId}/pause`,
 		{
 			method: "POST",
 		},
@@ -103,7 +103,7 @@ export async function resumeExecution(
 	fetchInstance: typeof fetch = fetch,
 ): Promise<void> {
 	const response = await fetchInstance(
-		`/experiments/${experimentId}/executions/${executionId}/resume`,
+		`/api/experiments/${experimentId}/executions/${executionId}/resume`,
 		{
 			method: "POST",
 		},
@@ -123,7 +123,7 @@ export async function getObservationSummary(
 	fetchInstance: typeof fetch = fetch,
 ): Promise<ObservationSummary | null> {
 	const response = await fetchInstance(
-		`/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/observation_summary`,
+		`/api/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/observation_summary`,
 	);
 	if (response.status === 404) {
 		return null;
@@ -145,7 +145,7 @@ export function getParametersUrl(
 	executionId: string,
 	iteration: number,
 ): string {
-	return `/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/parameters`;
+	return `/api/experiments/${experimentId}/executions/${executionId}/ensembles/${iteration}/parameters`;
 }
 
 /**
@@ -157,7 +157,7 @@ export async function getExecutionStatus(
 	fetchInstance: typeof fetch = fetch,
 ): Promise<any[]> {
 	const response = await fetchInstance(
-		`/experiments/${experimentId}/executions/${executionId}/status`,
+		`/api/experiments/${experimentId}/executions/${executionId}/status`,
 	);
 	if (!response.ok) {
 		throw new Error(`Failed to fetch execution status: ${response.statusText}`);
@@ -172,7 +172,7 @@ export async function startExperiment(
 	experimentId: string,
 	fetchInstance: typeof fetch = fetch,
 ): Promise<{ execution_id: string; iteration: number }> {
-	const response = await fetchInstance(`/experiments/${experimentId}/start`, {
+	const response = await fetchInstance(`/api/experiments/${experimentId}/start`, {
 		method: "POST",
 	});
 	if (!response.ok) {

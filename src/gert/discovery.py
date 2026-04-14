@@ -68,7 +68,7 @@ def find_gert_server() -> ConnectionInfo:
         # Validate the dictionary against the ConnectionInfo model
         connection_info = ConnectionInfo.model_validate(info_dict)
         with httpx.Client(base_url=connection_info.base_url, timeout=1.0) as client:
-            resp = client.get("/connection-info")
+            resp = client.get("/api/connection-info")
             if (
                 resp.status_code == 200
                 and resp.json()["server_id"] == connection_info.server_id

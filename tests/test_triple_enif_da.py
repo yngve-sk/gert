@@ -55,11 +55,11 @@ def test_triple_enif_da_convergence(
                 timeout=120.0,
             ) as client:
                 # Register and start the experiment
-                resp = client.post("/experiments", json=config_data)
+                resp = client.post("/api/experiments", json=config_data)
                 resp.raise_for_status()
                 experiment_id = resp.json()["id"]
 
-                resp = client.post(f"/experiments/{experiment_id}/start")
+                resp = client.post(f"/api/experiments/{experiment_id}/start")
                 resp.raise_for_status()
                 execution_id = resp.json()["execution_id"]
 
@@ -67,7 +67,7 @@ def test_triple_enif_da_convergence(
                 start_time = time.time()
                 while time.time() - start_time < 300:  # 5-minute timeout
                     state_resp = client.get(
-                        f"/experiments/{experiment_id}/executions/{execution_id}/state",
+                        f"/api/experiments/{experiment_id}/executions/{execution_id}/state",
                     )
                     state_resp.raise_for_status()
                     exec_state = state_resp.json()
@@ -85,7 +85,7 @@ def test_triple_enif_da_convergence(
                 variances = []
                 for it in range(num_iterations):
                     params_resp = client.get(
-                        f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/{it}/parameters",
+                        f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/{it}/parameters",
                     )
                     params_resp.raise_for_status()
                     df = pl.read_parquet(io.BytesIO(params_resp.content))

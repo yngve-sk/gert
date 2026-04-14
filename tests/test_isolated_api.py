@@ -5,16 +5,13 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from gert.server.gert_server import gert_server_app
 from gert.server.router import ServerState
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def test_deterministic_api() -> None:
-    client = TestClient(gert_server_app)
-
+def test_deterministic_api(client: TestClient) -> None:
     config_data = {
         "name": "deterministic-test",
         "base_working_directory": ".",
@@ -43,41 +40,41 @@ def test_deterministic_api() -> None:
         return_value="mock_job_id",
     ):
         logger.info("Registering experiment...")
-        resp = client.post("/experiments", json=config_data)
+        resp = client.post("/api/experiments", json=config_data)
         assert resp.status_code == 201
         experiment_id = resp.json()["id"]
         logger.info(f"Registered experiment: {experiment_id}")
 
         logger.info("Starting experiment...")
-        resp = client.post(f"/experiments/{experiment_id}/start")
+        resp = client.post(f"/api/experiments/{experiment_id}/start")
         assert resp.status_code == 200
         start_data = resp.json()
         execution_id = start_data["execution_id"]
         logger.info(f"Started execution: {execution_id}")
 
         logger.info("Fetching config...")
-        resp = client.get(f"/experiments/{experiment_id}/config")
+        resp = client.get(f"/api/experiments/{experiment_id}/config")
         assert resp.status_code == 200
         config = resp.json()
         logger.info(f"Config JSON keys: {list(config.keys())}")
 
         logger.info("Injecting mock statuses to avoid waiting for jobs...")
         client.post(
-            f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=RUNNING",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=RUNNING",
         )
         client.post(
-            f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=RUNNING&step_name=dummy_step",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=RUNNING&step_name=dummy_step",
         )
         client.post(
-            f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=COMPLETED&step_name=dummy_step",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=COMPLETED&step_name=dummy_step",
         )
         client.post(
-            f"/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=COMPLETED",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/ensembles/0/realizations/0/status?status=COMPLETED",
         )
 
         logger.info("Fetching status...")
         resp = client.get(
-            f"/experiments/{experiment_id}/executions/{execution_id}/status",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/status",
         )
         assert resp.status_code == 200
         statuses = resp.json()
@@ -102,7 +99,7 @@ def test_deterministic_api() -> None:
 
         logger.info("Fetching statuses after restart...")
         resp = client.get(
-            f"/experiments/{experiment_id}/executions/{execution_id}/status",
+            f"/api/experiments/{experiment_id}/executions/{execution_id}/status",
         )
         assert resp.status_code == 200
         recovered_statuses = resp.json()

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from gert.experiments.models import (
@@ -10,7 +9,6 @@ from gert.experiments.models import (
     ParameterMatrix,
     QueueConfig,
 )
-from gert.server.gert_server import create_gert_server
 from gert.server.router import (
     ExecutionData,
     RealizationStatus,
@@ -18,14 +16,7 @@ from gert.server.router import (
 )
 
 
-@pytest.fixture
-def test_client() -> TestClient:
-    """Fixture to provide a test client for the FastAPI app."""
-    app = create_gert_server()
-    return TestClient(app)
-
-
-def test_monitoring_api_get_status(test_client: TestClient) -> None:
+def test_monitoring_api_get_status(client: TestClient) -> None:
     """Test the GET endpoint for experiment status."""
     execution_id = "run_1-test"
     iteration = 1
@@ -54,8 +45,8 @@ def test_monitoring_api_get_status(test_client: TestClient) -> None:
     server_state.executions[execution_id] = exec_data
     server_state.experiment_executions["test_exp"].append(execution_id)
     server_state.latest_execution_id["test_exp"] = execution_id
-    response = test_client.get(
-        f"/experiments/test_exp/executions/{execution_id}/status",
+    response = client.get(
+        f"/api/experiments/test_exp/executions/{execution_id}/status",
     )
     assert response.status_code == 200
     data = response.json()

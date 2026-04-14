@@ -394,7 +394,7 @@ class TestQueueConfigTranslation:
 
         spec = submitter._translate_to_psij_spec(
             execution_steps=[{"name": "step1", "command": "cmd1"}],
-            monitoring_url="http://api",
+            monitoring_url="http://gert.xyz",
             experiment_id="exp1",
             execution_id="run1",
             iteration=0,
@@ -403,9 +403,9 @@ class TestQueueConfigTranslation:
 
         expected_command = (
             "set -e\n"
-            "curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=RUNNING&step_name=step1' || true\n"
-            "{ (cmd1) > step1.stdout 2> step1.stderr ; } || { curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=FAILED&step_name=step1' || true; exit 1; }\n"
-            "curl -s -X POST 'http://api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=COMPLETED&step_name=step1' || true"
+            "curl -s -X POST 'http://gert.xyz/api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=RUNNING&step_name=step1' || true\n"
+            "{ (cmd1) > step1.stdout 2> step1.stderr ; } || { curl -s -X POST 'http://gert.xyz/api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=FAILED&step_name=step1' || true; exit 1; }\n"
+            "curl -s -X POST 'http://gert.xyz/api/experiments/exp1/executions/run1/ensembles/0/realizations/5/status?status=COMPLETED&step_name=step1' || true"
         )
 
         assert spec.arguments == ["-c", expected_command]

@@ -20,7 +20,7 @@ def get_free_port() -> int:
 async def test_api_connect_pause_resume_flow(tmp_path: Path) -> None:
     """Test that a client can connect, view state, pause, and resume an experiment via API."""
     port = get_free_port()
-    api_url = f"http://127.0.0.1:{port}"
+    api_url = f"http://127.0.0.1:{port}/api"
 
     server_process = subprocess.Popen(
         [sys.executable, "-m", "gert", "server", "--port", str(port)],

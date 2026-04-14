@@ -57,7 +57,7 @@ def test_ui_smoke() -> None:
         )
 
         # Test 2: Try fetching experiments list (API)
-        api_resp = client.get("/experiments")
+        api_resp = client.get("/api/experiments")
         print(f"GET /experiments response: {api_resp.status_code}")
         assert api_resp.status_code == 200, (
             f"Expected API 200, got {api_resp.status_code}"

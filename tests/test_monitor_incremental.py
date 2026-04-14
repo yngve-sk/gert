@@ -14,7 +14,7 @@ def test_monitor_state_initialization() -> None:
     assert app.execution_id == "test_exec"
     assert (
         app.status_url
-        == "http://dummy:8000/experiments/test_exp/executions/test_exec/status"
+        == "http://dummy:8000/api/experiments/test_exp/executions/test_exec/status"
     )
     assert app._statuses == {}
     assert app._exiting is False

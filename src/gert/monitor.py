@@ -163,7 +163,7 @@ class ExecutionBrowserScreen(Screen[str]):
 
     @work(exclusive=True, thread=True)
     def _fetch_executions(self) -> None:
-        url = f"{self.api_url}/experiments/{self.experiment_id}/executions"
+        url = f"{self.api_url}/api/experiments/{self.experiment_id}/executions"
         try:
             req = urllib.request.Request(url)  # noqa: S310
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
@@ -397,7 +397,7 @@ class GertMonitorApp(App[None]):
 
         if self.execution_id:
             self.status_url = (
-                f"{self.api_url}/experiments/{self.experiment_id}/executions/"
+                f"{self.api_url}/api/experiments/{self.experiment_id}/executions/"
                 f"{self.execution_id}/status"
             )
         else:
@@ -449,7 +449,7 @@ class GertMonitorApp(App[None]):
     @work(exclusive=True, thread=True)
     def _fetch_config(self) -> None:
         """Fetch the experiment config to know the planned bounds."""
-        url = f"{self.api_url}/experiments/{self.experiment_id}/config"
+        url = f"{self.api_url}/api/experiments/{self.experiment_id}/config"
         try:
             req = urllib.request.Request(url)  # noqa: S310
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
@@ -618,7 +618,7 @@ class GertMonitorApp(App[None]):
     def _is_execution_terminal(self) -> bool:
         """Helper to check the high-level execution status."""
         state_url = (
-            f"{self.api_url}/experiments/{self.experiment_id}"
+            f"{self.api_url}/api/experiments/{self.experiment_id}"
             f"/executions/{self.execution_id}/state"
         )
 
@@ -703,7 +703,7 @@ class GertMonitorApp(App[None]):
         """Poll for observation summary and update metadata for an iteration."""
         # Poll for observation summary
         summary_url = (
-            f"{self.api_url}/experiments/{self.experiment_id}"
+            f"{self.api_url}/api/experiments/{self.experiment_id}"
             f"/executions/{self.execution_id}/ensembles/{it}/observation_summary"
         )
         try:
@@ -726,7 +726,7 @@ class GertMonitorApp(App[None]):
         # Poll for update metadata if iteration > 0
         if it > 0:
             meta_url = (
-                f"{self.api_url}/experiments/{self.experiment_id}"
+                f"{self.api_url}/api/experiments/{self.experiment_id}"
                 f"/executions/{self.execution_id}/ensembles/{it}/update/metadata"
             )
             try:
@@ -745,7 +745,7 @@ class GertMonitorApp(App[None]):
 
     def _poll_iteration_responses(self, it: int) -> None:
         url = (
-            f"{self.api_url}/experiments/{self.experiment_id}"
+            f"{self.api_url}/api/experiments/{self.experiment_id}"
             f"/executions/{self.execution_id}/ensembles/{it}/responses"
         )
         try:
@@ -1371,9 +1371,9 @@ class GertMonitorApp(App[None]):
         ]
 
         log_url = (
-            f"{self.api_url}/experiments/{self.experiment_id}/executions/"
+            f"{self.api_url}/api/experiments/{self.experiment_id}/executions/"
             f"{self.execution_id}/ensembles/{it}/realizations/{r_id}/steps/"
-            f"{step_name}/logs"
+            f"{step_name}/api/logs"
         )
         try:
             req = urllib.request.Request(log_url)  # noqa: S310
@@ -1414,9 +1414,9 @@ class GertMonitorApp(App[None]):
         step_name: str,
     ) -> None:
         log_url = (
-            f"{self.api_url}/experiments/{self.experiment_id}/executions/"
+            f"{self.api_url}/api/experiments/{self.experiment_id}/executions/"
             f"{self.execution_id}/ensembles/{it}/realizations/{r_id}/steps/"
-            f"{step_name}/logs"
+            f"{step_name}/api/logs"
         )
         try:
             req = urllib.request.Request(log_url)  # noqa: S310

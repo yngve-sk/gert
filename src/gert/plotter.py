@@ -188,7 +188,7 @@ class PlotterScreen(ModalScreen[None]):
 
         it = self.scope_node.iteration
         manifest_url = (
-            f"{self.api_url}/experiments/{self.experiment_id}/"
+            f"{self.api_url}/api/experiments/{self.experiment_id}/"
             f"executions/{self.execution_id}/ensembles/{it}/manifest"
         )
         try:
@@ -216,11 +216,11 @@ class PlotterScreen(ModalScreen[None]):
                 continue
 
             resps_url = (
-                f"{self.api_url}/experiments/{self.experiment_id}/"
+                f"{self.api_url}/api/experiments/{self.experiment_id}/"
                 f"executions/{self.execution_id}/ensembles/{it}/responses"
             )
             params_url = (
-                f"{self.api_url}/experiments/{self.experiment_id}/"
+                f"{self.api_url}/api/experiments/{self.experiment_id}/"
                 f"executions/{self.execution_id}/ensembles/{it}/parameters"
             )
 

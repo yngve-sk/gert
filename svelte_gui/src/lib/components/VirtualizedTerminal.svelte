@@ -26,7 +26,7 @@ export function connectStream() {
 	abortController = new AbortController();
 
 	if (isRunning) {
-		fetch("/logs/stream", {
+		fetch("/api/logs/stream", {
 			signal: abortController.signal,
 		})
 			.then(async (response) => {
@@ -81,7 +81,7 @@ export function connectStream() {
 			});
 	} else {
 		// Static fetch
-		fetch(`/experiments/${experimentId}/executions/${executionId}/logs`, {
+		fetch(`/api/experiments/${experimentId}/executions/${executionId}/logs`, {
 			signal: abortController.signal,
 		})
 			.then(async (response) => {
@@ -162,7 +162,7 @@ onDestroy(() => {
 		class="flex-auto overflow-y-auto p-3 font-mono text-[11px] leading-tight text-surface-300"
 	>
 		{#if logs.length === 0}
-			<div class="text-surface-500 italic">{isRunning ? 'Connecting to /logs/stream...' : 'Loading logs...'}</div>
+			<div class="text-surface-500 italic">{isRunning ? 'Connecting to /api/logs/stream...' : 'Loading logs...'}</div>
 		{:else}
 			{#each logs as log (log)}
 				<div class="whitespace-pre-wrap break-words">{log}</div>
