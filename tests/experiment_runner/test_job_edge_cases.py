@@ -1,5 +1,7 @@
 import asyncio
+from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import psij
@@ -15,7 +17,7 @@ from gert.experiments.models import (
 
 
 @pytest.fixture
-def mock_storage():
+def mock_storage() -> Generator[MagicMock]:
     with patch("gert.experiment_runner.experiment_orchestrator.StorageAPI") as mock:
         yield mock.return_value
 
@@ -37,7 +39,11 @@ def base_config(tmp_path: Path) -> ExperimentConfig:
 
 
 @pytest.mark.asyncio
-async def test_job_fails_after_curl_success(base_config, mock_storage, tmp_path):
+async def test_job_fails_after_curl_success(
+    base_config: ExperimentConfig,
+    mock_storage: MagicMock,
+    tmp_path: Path,
+) -> None:
     """
     Test edge case where HTTP CURL succeeds (COMPLETED), but the psij callback later
     erroneously reports FAILED or throws an error. FAILED should be ignored.
@@ -50,7 +56,7 @@ async def test_job_fails_after_curl_success(base_config, mock_storage, tmp_path)
 
     captured_callbacks = {}
 
-    def mock_submit(*args, **kwargs):
+    def mock_submit(*args: Any, **kwargs: Any) -> str:
         real_id = kwargs.get("realization_id")
         captured_callbacks[real_id] = kwargs.get("status_callback")
         return f"mock-job-{real_id}"
@@ -71,7 +77,8 @@ async def test_job_fails_after_curl_success(base_config, mock_storage, tmp_path)
         mock_status.state = psij.JobState.FAILED
 
         # Trigger the daemon callback
-        captured_callbacks[0](mock_job, mock_status)
+        if captured_callbacks[0]:
+            captured_callbacks[0](mock_job, mock_status)
 
         # Yield loop
         await asyncio.sleep(0.01)
@@ -81,7 +88,11 @@ async def test_job_fails_after_curl_success(base_config, mock_storage, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_psij_callback_exception_safety(base_config, mock_storage, tmp_path):
+async def test_psij_callback_exception_safety(
+    base_config: ExperimentConfig,
+    mock_storage: MagicMock,
+    tmp_path: Path,
+) -> None:
     """
     Verify that an exception inside the PSI/J daemon callback doesn't
     crash the thread, but is gracefully caught by the broad try-except block.
@@ -94,7 +105,7 @@ async def test_psij_callback_exception_safety(base_config, mock_storage, tmp_pat
 
     captured_callbacks = {}
 
-    def mock_submit(*args, **kwargs):
+    def mock_submit(*args: Any, **kwargs: Any) -> str:
         real_id = kwargs.get("realization_id")
         captured_callbacks[real_id] = kwargs.get("status_callback")
         return f"mock-job-{real_id}"
@@ -109,11 +120,12 @@ async def test_psij_callback_exception_safety(base_config, mock_storage, tmp_pat
             type(mock_status),
             "final",
             property(
-                lambda self: (_ for _ in ()).throw(ValueError("Intentional crash")),
+                lambda _self: (_ for _ in ()).throw(ValueError("Intentional crash")),
             ),
         )
 
         # If it's not wrapped in try-except, this line will throw the error and fail the test
-        captured_callbacks[0](mock_job, mock_status)
+        if captured_callbacks[0]:
+            captured_callbacks[0](mock_job, mock_status)
 
         assert True, "Survived deliberate crash inside psij callback"

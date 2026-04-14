@@ -275,7 +275,8 @@ class ExperimentOrchestrator:
                     logger.exception("Monitoring callback failed")
 
         # A realization is complete if ALL expected steps are successful,
-        # OR if we received an overarching COMPLETED signal (step_name is None) from PSI/J
+        # OR if we received an overarching COMPLETED signal (step_name is None)
+        # from PSI/J
         expected_steps = {s.name for s in self._config.forward_model_steps}
         is_complete = (
             expected_steps.issubset(self._successful_steps[iteration][realization_id])
@@ -377,7 +378,12 @@ class ExperimentOrchestrator:
             self._iteration_events[iteration].set()
 
     async def run_experiment(self) -> None:  # noqa: C901
-        """Execute the full macro iteration loop (N+1 iterations)."""
+        """Execute the full macro iteration loop (N+1 iterations).
+
+        Raises:
+            RuntimeError: If the update fails.
+
+        """
         num_updates = len(self._config.updates)
 
         # Iteration 0 uses prior from config
@@ -522,7 +528,8 @@ class ExperimentOrchestrator:
                         )
                     # Don't let a math crash take down the server.
                     # Re-raise to gracefully trigger the surrounding try/except
-                    # in _run_wrapped which correctly handles background execution failures.
+                    # in _run_wrapped which correctly handles background
+                    # execution failures.
                     msg = f"Algorithm {update_step.algorithm} failed: {e}"
                     raise RuntimeError(msg) from e
                 finally:
@@ -734,7 +741,10 @@ class ExperimentOrchestrator:
 
                     # If it failed but no logs were found, capture PSI/J or shell errors
                     if status.state == psij.JobState.FAILED and not logs_transferred:
-                        msg = f"Job failed without producing logs. Status: {status.message}"
+                        msg = (
+                            f"Job failed without producing logs."
+                            f" Status: {status.message}"
+                        )
                         first_step = (
                             execution_steps[0]["name"] if execution_steps else "unknown"
                         )
@@ -748,7 +758,8 @@ class ExperimentOrchestrator:
                             "stderr",
                         )
 
-                    # Track outcome from scheduler (primary role: catch failures, fallback for completions)
+                    # Track outcome from scheduler
+                    # (primary role: catch failures, fallback for completions)
                     if status.state in {
                         psij.JobState.FAILED,
                         psij.JobState.CANCELED,
@@ -768,8 +779,9 @@ class ExperimentOrchestrator:
                             loop,
                         )
                     elif status.state == psij.JobState.COMPLETED:
-                        # If the script exits 0, we can safely guarantee it finished its python
-                        # execution and flushed to disk, even if the final curl failed over the network.
+                        # If the script exits 0, we can safely guarantee it finished
+                        # its python execution and flushed to disk, even if the final
+                        # curl failed over the network.
                         asyncio.run_coroutine_threadsafe(
                             self.record_realization_complete(
                                 iteration,
@@ -792,7 +804,8 @@ class ExperimentOrchestrator:
                         logger.exception("Monitoring callback threadsafe failed")
             except Exception:
                 logger.exception(
-                    f"Unexpected error in status callback for realization {realization_id}",
+                    f"Unexpected error in status callback "
+                    f"for realization {realization_id}",
                 )
 
         return _status_cb

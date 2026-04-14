@@ -1,7 +1,9 @@
 """Tests for Orchestrator completion fallbacks."""
 
 import asyncio
+from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import psij
@@ -17,7 +19,7 @@ from gert.experiments.models import (
 
 
 @pytest.fixture
-def mock_storage():
+def mock_storage() -> Generator[MagicMock]:
     with patch("gert.experiment_runner.experiment_orchestrator.StorageAPI") as mock:
         yield mock.return_value
 
@@ -40,7 +42,11 @@ def base_config(tmp_path: Path) -> ExperimentConfig:
 
 
 @pytest.mark.asyncio
-async def test_psij_fallback_completion(base_config, mock_storage, tmp_path):
+async def test_psij_fallback_completion(
+    base_config: ExperimentConfig,
+    mock_storage: MagicMock,
+    tmp_path: Path,
+) -> None:
     """
     Verify that if the HTTP curl never arrives, the Orchestrator successfully
     completes the iteration by relying on the PSI/J COMPLETED daemon signal.
@@ -55,7 +61,7 @@ async def test_psij_fallback_completion(base_config, mock_storage, tmp_path):
     # We want to capture the status callback passed to job_submitter.submit
     captured_callbacks = {}
 
-    def mock_submit(*args, **kwargs):
+    def mock_submit(*args: Any, **kwargs: Any) -> str:
         real_id = kwargs.get("realization_id")
         captured_callbacks[real_id] = kwargs.get("status_callback")
         return f"mock-job-{real_id}"
@@ -75,10 +81,12 @@ async def test_psij_fallback_completion(base_config, mock_storage, tmp_path):
         mock_status.state = psij.JobState.COMPLETED
 
         # Trigger the daemon callback for realization 0
-        captured_callbacks[0](mock_job, mock_status)
+        if captured_callbacks[0]:
+            captured_callbacks[0](mock_job, mock_status)
 
         # 3. Simulate realization 1 completion via PSI/J daemon ONLY
-        captured_callbacks[1](mock_job, mock_status)
+        if captured_callbacks[1]:
+            captured_callbacks[1](mock_job, mock_status)
 
         # 4. Verification
         # The iteration event for iteration 0 should eventually be set

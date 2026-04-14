@@ -5,10 +5,10 @@ from typing import Any
 
 import numpy as np
 import polars as pl
-from iterative_ensemble_smoother import (
+from iterative_ensemble_smoother import (  # type: ignore[import-not-found]
     ESMDA,
 )
-from iterative_ensemble_smoother.experimental import (
+from iterative_ensemble_smoother.experimental import (  # type: ignore[import-not-found]
     DistanceESMDA,
 )
 
@@ -146,15 +146,13 @@ class ESUpdate(UpdateAlgorithm):
                         # Global scalars are not localized (correlation = 1.0)
                         rho_blocks.append(np.ones((n_feats, len(observations))))
                     else:
-                        loc_matrix = toolkit.calculate_localization(  # type: ignore
+                        toolkit.calculate_localization(
                             grid_id=pm.grid_id,
                             obs_meta=observations,
                             # base_length and taper_function not currently supported by stub
                         )
-                        if loc_matrix is None:
-                            rho_blocks.append(np.ones((n_feats, len(observations))))
-                        else:
-                            rho_blocks.append(loc_matrix)
+                        # Always fallback to ones since it's a stub
+                        rho_blocks.append(np.ones((n_feats, len(observations))))
 
                 if rho_blocks:
                     rho = np.vstack(rho_blocks)

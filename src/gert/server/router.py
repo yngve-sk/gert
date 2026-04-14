@@ -316,7 +316,7 @@ def _recover_execution(
     summary="List all experiments",
     description="Returns a list of all registered experiment configurations.",
 )
-async def list_experiments() -> list[dict[str, str]]:
+def list_experiments() -> list[dict[str, str]]:
     """List all registered experiments."""
     # Start with in-memory ones
     server_state = ServerState.get()
@@ -509,7 +509,7 @@ async def resume_execution(  # noqa: C901
     summary="Retrieve data manifest",
     description="Lightweight cache-busting endpoint returning timestamps.",
 )
-async def get_manifest(
+def get_manifest(
     experiment_id: str,
     execution_id: str,
     iteration: int,
@@ -558,7 +558,7 @@ def _ensure_config_loaded(experiment_id: str) -> ExperimentConfig | None:
     summary="Retrieve experiment configuration",
     description="Returns the immutable configuration for a given experiment ID.",
 )
-async def get_experiment_config(
+def get_experiment_config(
     experiment_id: Annotated[
         str,
         FastApiPath(
@@ -723,7 +723,7 @@ async def start_experiment(
     summary="List all executions for an experiment",
     description="Returns a list of all historical and active executions.",
 )
-async def list_executions(
+def list_executions(
     experiment_id: str,
 ) -> list[ExecutionState]:
     """List all executions for an experiment.
@@ -748,7 +748,7 @@ async def list_executions(
             continue
 
         try:
-            state = await get_execution_state(experiment_id, exec_dir.name)
+            state = get_execution_state(experiment_id, exec_dir.name)
             executions.append(state)
         except HTTPException:
             continue
@@ -769,7 +769,7 @@ async def list_executions(
     summary="Retrieve execution state",
     description="Returns the overall state of an execution.",
 )
-async def get_execution_state(
+def get_execution_state(
     experiment_id: str,
     execution_id: str,
 ) -> ExecutionState:
@@ -828,7 +828,7 @@ async def get_execution_state(
     description="Returns the status of all realizations for the latest "
     "execution of a given experiment ID.",
 )
-async def get_latest_experiment_status(
+def get_latest_experiment_status(
     experiment_id: str,
 ) -> list[RealizationStatus]:
     """Retrieve the status of all realizations for the latest experiment run.
@@ -862,7 +862,7 @@ async def get_latest_experiment_status(
     summary="Retrieve specific execution status",
     description="Returns the status of all realizations for a specific execution ID.",
 )
-async def get_execution_status(
+def get_execution_status(
     experiment_id: str,
     execution_id: str,
 ) -> list[RealizationStatus]:
@@ -1131,7 +1131,7 @@ async def update_step_status(
     summary="Retrieve step execution logs",
     description="Returns the stdout and stderr logs for a specific forward model step.",
 )
-async def get_step_logs(
+def get_step_logs(
     experiment_id: str,
     execution_id: str,
     iteration: int,
@@ -1228,7 +1228,7 @@ async def ingest_data(
         },
     },
 )
-async def get_parameters(
+def get_parameters(
     experiment_id: str,
     execution_id: str,
     iteration: int,
@@ -1296,7 +1296,7 @@ async def get_parameters(
         },
     },
 )
-async def get_responses(
+def get_responses(
     experiment_id: str,
     execution_id: str,
     iteration: int,
@@ -1353,7 +1353,7 @@ async def get_responses(
     summary="Retrieve update metadata",
     description="Returns the metadata for the update that produced this iteration.",
 )
-async def get_update_metadata(
+def get_update_metadata(
     experiment_id: str,
     execution_id: str,
     iteration: int,
@@ -1391,7 +1391,7 @@ async def get_update_metadata(
     summary="Retrieve iteration observation summary",
     description="Returns the average deviation statistics for the iteration.",
 )
-async def get_observation_summary(
+def get_observation_summary(
     experiment_id: str,
     execution_id: str,
     iteration: int,
@@ -1429,7 +1429,7 @@ async def execution_events_ws(
     try:
         while True:
             try:
-                status_list = await get_execution_status(experiment_id, execution_id)
+                status_list = get_execution_status(experiment_id, execution_id)
                 # Convert to dicts for JSON serialization
                 current_state = [s.model_dump(mode="json") for s in status_list]
                 current_state_json = json.dumps(current_state)

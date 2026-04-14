@@ -129,8 +129,8 @@ def _ensure_server(  # noqa: C901
 
         server_process = subprocess.Popen(
             [sys.executable, "-m", "gert", "server", "--port", str(port)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             text=True,
         )
 
@@ -139,12 +139,7 @@ def _ensure_server(  # noqa: C901
         except NoGertServerFoundError:
             print("Failed to start temporary server.", file=sys.stderr)
             if server_process.poll() is not None:
-                stdout, stderr = server_process.communicate()
                 print(f"Server exited with code {server_process.returncode}")
-                if stdout:
-                    print(f"Stdout:\n{stdout}")
-                if stderr:
-                    print(f"Stderr:\n{stderr}")
             server_process.terminate()
             try:
                 server_process.wait(timeout=5)
@@ -400,11 +395,7 @@ def _handle_run_command(args: argparse.Namespace) -> None:
 
 
 def _handle_server_command(args: argparse.Namespace) -> None:
-    """Handle the 'gert server' command.
-
-    Raises:
-        OSError: If there are underlying socket/port-binding issues that are unhandled.
-    """
+    """Handle the 'gert server' command."""
     configure_server_logging()
     port = args.port if args.port != 0 else get_free_port()
     host = args.host
@@ -827,14 +818,17 @@ def _handle_ui_command(args: argparse.Namespace) -> None:  # noqa: C901
         print(f"🖥️  Web GUI URL        : {resolved_api_url}")
         print(f"⚙️  API Base URL       : {resolved_api_url}")
         print(
-            f"📥 Status Endpoint    : {resolved_api_url}/experiments/{{id}}/executions/{{exec_id}}/ensembles/{{iter}}/realizations/{{real_id}}/status",
+            f"📥 Status Endpoint    : {resolved_api_url}/experiments/{{id}}/executions"
+            f"/{{exec_id}}/ensembles/{{iter}}/realizations/{{real_id}}/status",
         )
         print(
-            f"📥 Data Ingestion     : {resolved_api_url}/experiments/{{id}}/executions/{{exec_id}}/ensembles/{{iter}}/realizations/{{real_id}}/responses",
+            f"📥 Data Ingestion     : {resolved_api_url}/experiments/{{id}}/executions"
+            f"/{{exec_id}}/ensembles/{{iter}}/realizations/{{real_id}}/responses",
         )
         if server_process:
             print(
-                f"\n⚠️  Note: Running temporary, embedded API server (PID: {server_process.pid}).",
+                f"\n⚠️  Note: Running temporary, embedded API server "
+                f"(PID: {server_process.pid}).",
             )
             print("          This server will be destroyed when you exit this command.")
         else:
