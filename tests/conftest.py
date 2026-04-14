@@ -51,12 +51,21 @@ def simple_example_dir(copy_example: Callable[[str], Path]) -> Path:
 
 
 @pytest.fixture
-def client() -> Generator[TestClient]:
-    """Provides a fresh, isolated TestClient for each test.
+def client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[TestClient]:
+    """Provides a fresh, isolated TestClient that runs in a temporary directory.
+
+    This fixture automatically changes the current working directory to a unique
+    temporary directory for the duration of the test. This ensures that any
+    files created by the server (e.g., logs, discovery files) are sandboxed
+    and do not leak between tests or into the project root.
 
     Yields:
         TestClient: An initialized FastAPI test client.
     """
+    monkeypatch.chdir(tmp_path)
     app = create_gert_server()
     with TestClient(app) as c:
         yield c
