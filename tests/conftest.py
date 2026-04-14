@@ -69,3 +69,8 @@ def client(
     app = create_gert_server()
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def use_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)

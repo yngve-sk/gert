@@ -11,11 +11,6 @@ from gert.server.gert_server import gert_server_app
 from gert.storage.consolidation import ConsolidationWorker
 
 
-@pytest.fixture(autouse=True)
-def setup_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.chdir(tmp_path)
-
-
 async def test_storage_integration_blast(client: TestClient) -> None:
     """Blast 100 concurrent payloads and verify consolidation."""
     # Register an experiment
