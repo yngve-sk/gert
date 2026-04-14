@@ -72,5 +72,6 @@ def client(
 
 
 @pytest.fixture
-def use_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def use_tmpdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.chdir(tmp_path)
+    return tmp_path

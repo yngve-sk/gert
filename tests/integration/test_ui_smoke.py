@@ -10,7 +10,7 @@ import httpx
 from gert.discovery import wait_for_gert_server
 
 
-def test_ui_smoke() -> None:
+def test_ui_smoke(use_tmpdir: Path) -> None:
     """
     Smoke test to ensure 'gert ui' starts without crashing and serves the root HTML successfully.
     """
@@ -76,7 +76,3 @@ def test_ui_smoke() -> None:
         except subprocess.TimeoutExpired:
             server_proc.kill()
         shutil.rmtree(tmp_dir)
-
-
-if __name__ == "__main__":
-    test_ui_smoke()
